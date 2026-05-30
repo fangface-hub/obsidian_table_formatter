@@ -1,0 +1,9 @@
+{
+  "id": "table-formatter",
+  "name": "Table Formatter",
+  "version": "0.1.0",
+  "minAppVersion": "1.5.0",
+  "description": "Formats Markdown tables when files are saved.",
+  "author": "fangface",
+  "isDesktopOnly": false
+}
