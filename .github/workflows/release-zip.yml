@@ -72,7 +72,6 @@ jobs:
         with:
           tag_name: ${{ steps.meta.outputs.version }}
           files: |
-            ${{ steps.meta.outputs.zip_name }}
             manifest.json
             main.js
             versions.json
