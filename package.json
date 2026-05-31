@@ -1,6 +1,6 @@
 {
   "name": "obsidian-table-formatter",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "An Obsidian plugin that formats Markdown tables on save.",
   "main": "main.js",
   "scripts": {

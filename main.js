@@ -1,4 +1,3 @@
-/* eslint-disable */
 "use strict";
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -47,7 +46,7 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
           new import_obsidian.Notice("No active Markdown file.");
           return;
         }
-        const changed = await this.formatFile(activeFile);
+        const changed = await this.formatFile(activeFile, false);
         if (changed) {
           new import_obsidian.Notice("Tables formatted in active file.");
           return;
@@ -66,12 +65,17 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
     if (!(file instanceof import_obsidian.TFile) || file.extension !== "md") {
       return;
     }
-    await this.formatFile(file);
+    await this.formatFile(file, true);
   }
-  async formatFile(file) {
+  async formatFile(file, skipIfEditing) {
     if (this.processingFiles.has(file.path)) {
       return false;
     }
+    const activeEditingView = this.getActiveEditingView(file);
+    if (skipIfEditing && activeEditingView?.editor.hasFocus()) {
+      return false;
+    }
+    const editorState = activeEditingView ? this.captureEditorState(activeEditingView) : null;
     const content = await this.app.vault.cachedRead(file);
     const formatted = formatMarkdownTables(content, this.settings);
     if (formatted === content) {
@@ -80,6 +84,9 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
     try {
       this.processingFiles.add(file.path);
       await this.app.vault.process(file, () => formatted);
+      if (activeEditingView && editorState) {
+        this.restoreEditorState(activeEditingView, editorState, content, formatted);
+      }
     } catch (error) {
       console.error("table-formatter-on-save: failed to format table", error);
       new import_obsidian.Notice("Table formatting failed. Check console for details.");
@@ -88,6 +95,67 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
       this.processingFiles.delete(file.path);
     }
     return true;
+  }
+  getActiveEditingView(file) {
+    const activeView = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
+    if (!activeView || activeView.file?.path !== file.path || activeView.getMode() !== "source") {
+      return null;
+    }
+    return activeView;
+  }
+  captureEditorState(view) {
+    const editor = view.editor;
+    return {
+      selections: editor.listSelections().map((selection) => ({
+        anchor: selection.anchor,
+        head: selection.head
+      })),
+      scroll: editor.getScrollInfo()
+    };
+  }
+  restoreEditorState(view, state, sourceContent, formattedContent) {
+    const editor = view.editor;
+    const mappedSelections = state.selections.map((selection) => ({
+      anchor: this.mapEditorPosition(sourceContent, formattedContent, selection.anchor),
+      head: this.mapEditorPosition(sourceContent, formattedContent, selection.head)
+    }));
+    editor.focus();
+    editor.setSelections(mappedSelections, 0);
+    editor.scrollTo(state.scroll.left, state.scroll.top);
+  }
+  mapEditorPosition(sourceContent, formattedContent, position) {
+    const sourceLines = sourceContent.split(/\r?\n/);
+    const formattedLines = formattedContent.split(/\r?\n/);
+    const line = Math.max(0, Math.min(position.line, formattedLines.length - 1));
+    const sourceLine = sourceLines[line] ?? "";
+    const formattedLine = formattedLines[line] ?? "";
+    if (!looksLikeTableRow(sourceLine) || !looksLikeTableRow(formattedLine)) {
+      return {
+        line,
+        ch: Math.max(0, Math.min(position.ch, formattedLine.length))
+      };
+    }
+    const mappedCh = this.mapTableRowCh(sourceLine, formattedLine, position.ch);
+    return {
+      line,
+      ch: mappedCh
+    };
+  }
+  mapTableRowCh(sourceLine, formattedLine, sourceCh) {
+    const sourceLayout = parseRowLayout(sourceLine);
+    const formattedLayout = parseRowLayout(formattedLine);
+    if (!sourceLayout || !formattedLayout || sourceLayout.cells.length !== formattedLayout.cells.length) {
+      return Math.max(0, Math.min(sourceCh, formattedLine.length));
+    }
+    const sourceColumn = Math.max(0, sourceCh);
+    const cellIndex = sourceLayout.cells.findIndex((cell) => sourceColumn >= cell.start && sourceColumn <= cell.end);
+    if (cellIndex < 0) {
+      return Math.max(0, Math.min(sourceCh, formattedLine.length));
+    }
+    const sourceCell = sourceLayout.cells[cellIndex];
+    const formattedCell = formattedLayout.cells[cellIndex];
+    const offsetWithinCell = Math.max(0, Math.min(sourceColumn - sourceCell.contentStart, sourceCell.contentLength));
+    return Math.max(0, Math.min(formattedCell.contentStart + Math.min(offsetWithinCell, formattedCell.contentLength), formattedLine.length));
   }
   async loadSettings() {
     const data = await this.loadData();
@@ -218,6 +286,41 @@ function splitRow(line) {
     text = text.slice(0, -1);
   }
   return text.split("|").map((cell) => cell.trim());
+}
+function parseRowLayout(line) {
+  const trimmed = line.trim();
+  if (!trimmed.includes("|")) {
+    return null;
+  }
+  let body = trimmed;
+  const hasLeadingPipe = body.startsWith("|");
+  const hasTrailingPipe = body.endsWith("|");
+  if (hasLeadingPipe) {
+    body = body.slice(1);
+  }
+  if (hasTrailingPipe) {
+    body = body.slice(0, -1);
+  }
+  const parts = body.split("|");
+  const cells = [];
+  let cursor = hasLeadingPipe ? 1 : 0;
+  parts.forEach((part) => {
+    const leadingSpaces = part.length - part.trimStart().length;
+    const content = part.trim();
+    const contentStart = cursor + leadingSpaces;
+    const start = cursor;
+    const end = cursor + part.length;
+    cells.push({
+      start,
+      end,
+      contentStart,
+      contentLength: content.length
+    });
+    cursor = end + 1;
+  });
+  return {
+    cells
+  };
 }
 function parseTable(lines) {
   const rows = lines.map(splitRow);

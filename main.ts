@@ -1,5 +1,7 @@
 import {
     App,
+    EditorPosition,
+    MarkdownView,
     Notice,
     Plugin,
     PluginSettingTab,
@@ -40,7 +42,7 @@ export default class TableFormatterPlugin extends Plugin {
           return;
         }
 
-        const changed = await this.formatFile(activeFile);
+        const changed = await this.formatFile(activeFile, false);
         if (changed) {
           new Notice("Tables formatted in active file.");
           return;
@@ -64,14 +66,20 @@ export default class TableFormatterPlugin extends Plugin {
       return;
     }
 
-    await this.formatFile(file);
+    await this.formatFile(file, true);
   }
 
-  private async formatFile(file: TFile): Promise<boolean> {
+  private async formatFile(file: TFile, skipIfEditing: boolean): Promise<boolean> {
     if (this.processingFiles.has(file.path)) {
       return false;
     }
 
+    const activeEditingView = this.getActiveEditingView(file);
+    if (skipIfEditing && activeEditingView?.editor.hasFocus()) {
+      return false;
+    }
+
+    const editorState = activeEditingView ? this.captureEditorState(activeEditingView) : null;
     const content = await this.app.vault.cachedRead(file);
     const formatted = formatMarkdownTables(content, this.settings);
 
@@ -82,6 +90,9 @@ export default class TableFormatterPlugin extends Plugin {
     try {
       this.processingFiles.add(file.path);
       await this.app.vault.process(file, () => formatted);
+      if (activeEditingView && editorState) {
+        this.restoreEditorState(activeEditingView, editorState, content, formatted);
+      }
     } catch (error) {
       console.error("table-formatter-on-save: failed to format table", error);
       new Notice("Table formatting failed. Check console for details.");
@@ -91,6 +102,83 @@ export default class TableFormatterPlugin extends Plugin {
     }
 
     return true;
+  }
+
+  private getActiveEditingView(file: TFile): MarkdownView | null {
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!activeView || activeView.file?.path !== file.path || activeView.getMode() !== "source") {
+      return null;
+    }
+
+    return activeView;
+  }
+
+  private captureEditorState(view: MarkdownView) {
+    const editor = view.editor;
+    return {
+      selections: editor.listSelections().map((selection) => ({
+        anchor: selection.anchor,
+        head: selection.head
+      })),
+      scroll: editor.getScrollInfo()
+    };
+  }
+
+  private restoreEditorState(
+    view: MarkdownView,
+    state: ReturnType<TableFormatterPlugin["captureEditorState"]>,
+    sourceContent: string,
+    formattedContent: string
+  ): void {
+    const editor = view.editor;
+    const mappedSelections = state.selections.map((selection) => ({
+      anchor: this.mapEditorPosition(sourceContent, formattedContent, selection.anchor),
+      head: this.mapEditorPosition(sourceContent, formattedContent, selection.head)
+    }));
+
+    editor.focus();
+    editor.setSelections(mappedSelections, 0);
+    editor.scrollTo(state.scroll.left, state.scroll.top);
+  }
+
+  private mapEditorPosition(sourceContent: string, formattedContent: string, position: EditorPosition): EditorPosition {
+    const sourceLines = sourceContent.split(/\r?\n/);
+    const formattedLines = formattedContent.split(/\r?\n/);
+    const line = Math.max(0, Math.min(position.line, formattedLines.length - 1));
+    const sourceLine = sourceLines[line] ?? "";
+    const formattedLine = formattedLines[line] ?? "";
+
+    if (!looksLikeTableRow(sourceLine) || !looksLikeTableRow(formattedLine)) {
+      return {
+        line,
+        ch: Math.max(0, Math.min(position.ch, formattedLine.length))
+      };
+    }
+
+    const mappedCh = this.mapTableRowCh(sourceLine, formattedLine, position.ch);
+    return {
+      line,
+      ch: mappedCh
+    };
+  }
+
+  private mapTableRowCh(sourceLine: string, formattedLine: string, sourceCh: number): number {
+    const sourceLayout = parseRowLayout(sourceLine);
+    const formattedLayout = parseRowLayout(formattedLine);
+    if (!sourceLayout || !formattedLayout || sourceLayout.cells.length !== formattedLayout.cells.length) {
+      return Math.max(0, Math.min(sourceCh, formattedLine.length));
+    }
+
+    const sourceColumn = Math.max(0, sourceCh);
+    const cellIndex = sourceLayout.cells.findIndex((cell) => sourceColumn >= cell.start && sourceColumn <= cell.end);
+    if (cellIndex < 0) {
+      return Math.max(0, Math.min(sourceCh, formattedLine.length));
+    }
+
+    const sourceCell = sourceLayout.cells[cellIndex];
+    const formattedCell = formattedLayout.cells[cellIndex];
+    const offsetWithinCell = Math.max(0, Math.min(sourceColumn - sourceCell.contentStart, sourceCell.contentLength));
+    return Math.max(0, Math.min(formattedCell.contentStart + Math.min(offsetWithinCell, formattedCell.contentLength), formattedLine.length));
   }
 
   async loadSettings(): Promise<void> {
@@ -271,6 +359,60 @@ function splitRow(line: string): string[] {
   }
 
   return text.split("|").map((cell) => cell.trim());
+}
+
+type RowLayoutCell = {
+  start: number;
+  end: number;
+  contentStart: number;
+  contentLength: number;
+};
+
+type RowLayout = {
+  cells: RowLayoutCell[];
+};
+
+function parseRowLayout(line: string): RowLayout | null {
+  const trimmed = line.trim();
+  if (!trimmed.includes("|")) {
+    return null;
+  }
+
+  let body = trimmed;
+  const hasLeadingPipe = body.startsWith("|");
+  const hasTrailingPipe = body.endsWith("|");
+
+  if (hasLeadingPipe) {
+    body = body.slice(1);
+  }
+  if (hasTrailingPipe) {
+    body = body.slice(0, -1);
+  }
+
+  const parts = body.split("|");
+  const cells: RowLayoutCell[] = [];
+  let cursor = hasLeadingPipe ? 1 : 0;
+
+  parts.forEach((part) => {
+    const leadingSpaces = part.length - part.trimStart().length;
+    const content = part.trim();
+    const contentStart = cursor + leadingSpaces;
+    const start = cursor;
+    const end = cursor + part.length;
+
+    cells.push({
+      start,
+      end,
+      contentStart,
+      contentLength: content.length
+    });
+
+    cursor = end + 1;
+  });
+
+  return {
+    cells
+  };
 }
 
 function parseTable(lines: string[]): ParsedTable {

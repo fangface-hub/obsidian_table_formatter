@@ -50,7 +50,8 @@ Note: `npm run build` runs lint first via `esbuild.config.mjs`.
 
 ## Community Plugin Release
 
-1. Bump version in `manifest.json` and `versions.json`.
+1. Bump the patch version by running `npm run version:patch`.
+1. This executes `node scripts/bump-patch-version.mjs` and updates `package.json`, `package-lock.json`, `manifest.json`, and `versions.json` together.
 1. Commit and push to GitHub.
 1. Create a GitHub Release with tag exactly matching `manifest.json` version.
 1. Attach release assets: `main.js`, `manifest.json`, `styles.css` (optional), `versions.json` (recommended).
