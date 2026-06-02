@@ -46,7 +46,7 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
           new import_obsidian.Notice("No active Markdown file.");
           return;
         }
-        const changed = await this.formatFile(activeFile, false);
+        const changed = await this.formatFile(activeFile);
         if (changed) {
           new import_obsidian.Notice("Tables formatted in active file.");
           return;
@@ -65,16 +65,13 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
     if (!(file instanceof import_obsidian.TFile) || file.extension !== "md") {
       return;
     }
-    await this.formatFile(file, true);
+    await this.formatFile(file);
   }
-  async formatFile(file, skipIfEditing) {
+  async formatFile(file) {
     if (this.processingFiles.has(file.path)) {
       return false;
     }
     const activeEditingView = this.getActiveEditingView(file);
-    if (skipIfEditing && activeEditingView?.editor.hasFocus()) {
-      return false;
-    }
     const editorState = activeEditingView ? this.captureEditorState(activeEditingView) : null;
     const content = await this.app.vault.cachedRead(file);
     const formatted = formatMarkdownTables(content, this.settings);
@@ -242,12 +239,13 @@ function formatMarkdownTables(content, settings) {
       continue;
     }
     const start = i;
+    const tablePrefix = getBlockquotePrefix(lines[start]);
     let end = i + 1;
     while (end + 1 < lines.length && looksLikeTableRow(lines[end + 1])) {
       end += 1;
     }
     const blockLines = lines.slice(start, end + 1);
-    const formatted = formatTableBlock(blockLines, settings);
+    const formatted = formatTableBlock(blockLines, settings, tablePrefix);
     output.push(...formatted);
     i = end + 1;
   }
@@ -266,8 +264,8 @@ function isTableStart(lines, index) {
   return looksLikeTableRow(first) && isDelimiterRow(second);
 }
 function looksLikeTableRow(line) {
-  const trimmed = line.trim();
-  return trimmed.includes("|") && !trimmed.startsWith(">") && trimmed.length > 0;
+  const trimmed = stripBlockquotePrefix(line).trim();
+  return trimmed.includes("|") && trimmed.length > 0;
 }
 function isDelimiterRow(line) {
   const cells = splitRow(line);
@@ -277,7 +275,7 @@ function isDelimiterRow(line) {
   return cells.every((cell) => /^:?-{1,}:?$/.test(cell.trim()));
 }
 function splitRow(line) {
-  const trimmed = line.trim();
+  const trimmed = stripBlockquotePrefix(line).trim();
   let text = trimmed;
   if (text.startsWith("|")) {
     text = text.slice(1);
@@ -286,6 +284,17 @@ function splitRow(line) {
     text = text.slice(0, -1);
   }
   return text.split("|").map((cell) => cell.trim());
+}
+function getBlockquotePrefix(line) {
+  const match = line.match(/^\s*(?:>\s*)+/);
+  return match ? match[0] : "";
+}
+function stripBlockquotePrefix(line) {
+  const prefix = getBlockquotePrefix(line);
+  if (!prefix) {
+    return line;
+  }
+  return line.slice(prefix.length);
 }
 function parseRowLayout(line) {
   const trimmed = line.trim();
@@ -328,7 +337,7 @@ function parseTable(lines) {
     rows
   };
 }
-function formatTableBlock(lines, settings) {
+function formatTableBlock(lines, settings, prefix) {
   const parsed = parseTable(lines);
   const columnCount = Math.max(...parsed.rows.map((row) => row.length));
   const normalizedRows = parsed.rows.map((row) => {
@@ -360,7 +369,10 @@ function formatTableBlock(lines, settings) {
     const row = normalizedRows[rowIndex];
     formattedRows.push(formatRow(row, settings.paddingSpaces, false));
   }
-  return formattedRows;
+  if (!prefix) {
+    return formattedRows;
+  }
+  return formattedRows.map((row) => `${prefix}${row}`);
 }
 function buildDelimiterCell(dashCount) {
   const dashes = "-".repeat(Math.max(1, dashCount));

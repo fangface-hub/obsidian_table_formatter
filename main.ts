@@ -1,13 +1,13 @@
 import {
-    App,
-    EditorPosition,
-    MarkdownView,
-    Notice,
-    Plugin,
-    PluginSettingTab,
-    Setting,
-    TAbstractFile,
-    TFile
+  App,
+  EditorPosition,
+  MarkdownView,
+  Notice,
+  Plugin,
+  PluginSettingTab,
+  Setting,
+  TAbstractFile,
+  TFile
 } from "obsidian";
 
 interface TableFormatterSettings {
@@ -42,7 +42,7 @@ export default class TableFormatterPlugin extends Plugin {
           return;
         }
 
-        const changed = await this.formatFile(activeFile, false);
+        const changed = await this.formatFile(activeFile);
         if (changed) {
           new Notice("Tables formatted in active file.");
           return;
@@ -66,19 +66,15 @@ export default class TableFormatterPlugin extends Plugin {
       return;
     }
 
-    await this.formatFile(file, true);
+    await this.formatFile(file);
   }
 
-  private async formatFile(file: TFile, skipIfEditing: boolean): Promise<boolean> {
+  private async formatFile(file: TFile): Promise<boolean> {
     if (this.processingFiles.has(file.path)) {
       return false;
     }
 
     const activeEditingView = this.getActiveEditingView(file);
-    if (skipIfEditing && activeEditingView?.editor.hasFocus()) {
-      return false;
-    }
-
     const editorState = activeEditingView ? this.captureEditorState(activeEditingView) : null;
     const content = await this.app.vault.cachedRead(file);
     const formatted = formatMarkdownTables(content, this.settings);
@@ -303,13 +299,14 @@ function formatMarkdownTables(content: string, settings: TableFormatterSettings)
     }
 
     const start = i;
+    const tablePrefix = getBlockquotePrefix(lines[start]);
     let end = i + 1;
     while (end + 1 < lines.length && looksLikeTableRow(lines[end + 1])) {
       end += 1;
     }
 
     const blockLines = lines.slice(start, end + 1);
-    const formatted = formatTableBlock(blockLines, settings);
+    const formatted = formatTableBlock(blockLines, settings, tablePrefix);
     output.push(...formatted);
     i = end + 1;
   }
@@ -334,8 +331,8 @@ function isTableStart(lines: string[], index: number): boolean {
 }
 
 function looksLikeTableRow(line: string): boolean {
-  const trimmed = line.trim();
-  return trimmed.includes("|") && !trimmed.startsWith(">") && trimmed.length > 0;
+  const trimmed = stripBlockquotePrefix(line).trim();
+  return trimmed.includes("|") && trimmed.length > 0;
 }
 
 function isDelimiterRow(line: string): boolean {
@@ -348,7 +345,7 @@ function isDelimiterRow(line: string): boolean {
 }
 
 function splitRow(line: string): string[] {
-  const trimmed = line.trim();
+  const trimmed = stripBlockquotePrefix(line).trim();
   let text = trimmed;
 
   if (text.startsWith("|")) {
@@ -359,6 +356,20 @@ function splitRow(line: string): string[] {
   }
 
   return text.split("|").map((cell) => cell.trim());
+}
+
+function getBlockquotePrefix(line: string): string {
+  const match = line.match(/^\s*(?:>\s*)+/);
+  return match ? match[0] : "";
+}
+
+function stripBlockquotePrefix(line: string): string {
+  const prefix = getBlockquotePrefix(line);
+  if (!prefix) {
+    return line;
+  }
+
+  return line.slice(prefix.length);
 }
 
 type RowLayoutCell = {
@@ -423,7 +434,7 @@ function parseTable(lines: string[]): ParsedTable {
   };
 }
 
-function formatTableBlock(lines: string[], settings: TableFormatterSettings): string[] {
+function formatTableBlock(lines: string[], settings: TableFormatterSettings, prefix: string): string[] {
   const parsed = parseTable(lines);
   const columnCount = Math.max(...parsed.rows.map((row) => row.length));
 
@@ -461,7 +472,11 @@ function formatTableBlock(lines: string[], settings: TableFormatterSettings): st
     formattedRows.push(formatRow(row, settings.paddingSpaces, false));
   }
 
-  return formattedRows;
+  if (!prefix) {
+    return formattedRows;
+  }
+
+  return formattedRows.map((row) => `${prefix}${row}`);
 }
 
 function buildDelimiterCell(dashCount: number): string {
