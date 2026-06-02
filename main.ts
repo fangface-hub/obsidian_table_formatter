@@ -1,13 +1,13 @@
 import {
-  App,
-  EditorPosition,
-  MarkdownView,
-  Notice,
-  Plugin,
-  PluginSettingTab,
-  Setting,
-  TAbstractFile,
-  TFile
+    App,
+    EditorPosition,
+    MarkdownView,
+    Notice,
+    Plugin,
+    PluginSettingTab,
+    Setting,
+    TAbstractFile,
+    TFile
 } from "obsidian";
 
 interface TableFormatterSettings {
@@ -87,7 +87,7 @@ export default class TableFormatterPlugin extends Plugin {
       this.processingFiles.add(file.path);
       await this.app.vault.process(file, () => formatted);
       if (activeEditingView && editorState) {
-        this.restoreEditorState(activeEditingView, editorState, content, formatted);
+        await this.restoreEditorState(activeEditingView, editorState, content, formatted);
       }
     } catch (error) {
       console.error("table-formatter-on-save: failed to format table", error);
@@ -120,21 +120,57 @@ export default class TableFormatterPlugin extends Plugin {
     };
   }
 
-  private restoreEditorState(
+  private async restoreEditorState(
     view: MarkdownView,
     state: ReturnType<TableFormatterPlugin["captureEditorState"]>,
     sourceContent: string,
     formattedContent: string
-  ): void {
+  ): Promise<void> {
+    await this.waitForEditorFlush();
+
+    if (view.file?.path === undefined || view.getMode() !== "source") {
+      return;
+    }
+
     const editor = view.editor;
     const mappedSelections = state.selections.map((selection) => ({
       anchor: this.mapEditorPosition(sourceContent, formattedContent, selection.anchor),
       head: this.mapEditorPosition(sourceContent, formattedContent, selection.head)
     }));
+    const currentSelections = editor.listSelections().map((selection) => ({
+      anchor: selection.anchor,
+      head: selection.head
+    }));
+
+    if (this.selectionsMatch(currentSelections, mappedSelections)) {
+      return;
+    }
 
     editor.focus();
     editor.setSelections(mappedSelections, 0);
     editor.scrollTo(state.scroll.left, state.scroll.top);
+  }
+
+  private async waitForEditorFlush(): Promise<void> {
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
+  }
+
+  private selectionsMatch(
+    left: Array<{ anchor: EditorPosition; head: EditorPosition }>,
+    right: Array<{ anchor: EditorPosition; head: EditorPosition }>
+  ): boolean {
+    if (left.length !== right.length) {
+      return false;
+    }
+
+    return left.every((selection, index) => {
+      const target = right[index];
+      return selection.anchor.line === target.anchor.line
+        && selection.anchor.ch === target.anchor.ch
+        && selection.head.line === target.head.line
+        && selection.head.ch === target.head.ch;
+    });
   }
 
   private mapEditorPosition(sourceContent: string, formattedContent: string, position: EditorPosition): EditorPosition {
@@ -143,38 +179,77 @@ export default class TableFormatterPlugin extends Plugin {
     const line = Math.max(0, Math.min(position.line, formattedLines.length - 1));
     const sourceLine = sourceLines[line] ?? "";
     const formattedLine = formattedLines[line] ?? "";
+    const fallbackCh = this.clampCursorPosition(position.ch, formattedLine.length);
 
     if (!looksLikeTableRow(sourceLine) || !looksLikeTableRow(formattedLine)) {
       return {
         line,
-        ch: Math.max(0, Math.min(position.ch, formattedLine.length))
+        ch: fallbackCh
       };
     }
 
     const mappedCh = this.mapTableRowCh(sourceLine, formattedLine, position.ch);
     return {
       line,
-      ch: mappedCh
+      ch: this.clampCursorPosition(mappedCh, formattedLine.length)
     };
   }
 
-  private mapTableRowCh(sourceLine: string, formattedLine: string, sourceCh: number): number {
-    const sourceLayout = parseRowLayout(sourceLine);
-    const formattedLayout = parseRowLayout(formattedLine);
-    if (!sourceLayout || !formattedLayout || sourceLayout.cells.length !== formattedLayout.cells.length) {
-      return Math.max(0, Math.min(sourceCh, formattedLine.length));
+  private clampCursorPosition(mappedCh: number, lineLength: number): number {
+    if (lineLength <= 0) {
+      return 0;
     }
 
-    const sourceColumn = Math.max(0, sourceCh);
+    return Math.max(0, Math.min(mappedCh, lineLength));
+  }
+
+  private mapTableRowCh(sourceLine: string, formattedLine: string, sourceCh: number): number {
+    const sourceNormalized = this.normalizeTableLine(sourceLine);
+    const formattedNormalized = this.normalizeTableLine(formattedLine);
+    const sourceLayout = parseRowLayout(sourceNormalized.text);
+    const formattedLayout = parseRowLayout(formattedNormalized.text);
+    if (!sourceLayout || !formattedLayout || sourceLayout.cells.length !== formattedLayout.cells.length) {
+      return sourceCh;
+    }
+
+    const sourceColumn = Math.max(0, Math.min(sourceCh - sourceNormalized.rawOffset, sourceNormalized.text.length));
     const cellIndex = sourceLayout.cells.findIndex((cell) => sourceColumn >= cell.start && sourceColumn <= cell.end);
     if (cellIndex < 0) {
-      return Math.max(0, Math.min(sourceCh, formattedLine.length));
+      return sourceCh;
     }
 
     const sourceCell = sourceLayout.cells[cellIndex];
     const formattedCell = formattedLayout.cells[cellIndex];
-    const offsetWithinCell = Math.max(0, Math.min(sourceColumn - sourceCell.contentStart, sourceCell.contentLength));
-    return Math.max(0, Math.min(formattedCell.contentStart + Math.min(offsetWithinCell, formattedCell.contentLength), formattedLine.length));
+    const sourceLeadingSpaces = Math.max(0, sourceCell.contentStart - sourceCell.start);
+    const sourceContentEnd = sourceCell.contentStart + sourceCell.contentLength;
+    const sourceTrailingSpaces = Math.max(0, sourceCell.end - sourceContentEnd);
+    const formattedLeadingSpaces = Math.max(0, formattedCell.contentStart - formattedCell.start);
+    const formattedContentEnd = formattedCell.contentStart + formattedCell.contentLength;
+    const formattedTrailingSpaces = Math.max(0, formattedCell.end - formattedContentEnd);
+
+    if (sourceColumn < sourceCell.contentStart) {
+      const offsetWithinLeading = Math.min(sourceColumn - sourceCell.start, sourceLeadingSpaces);
+      return formattedNormalized.rawOffset + formattedCell.start + Math.min(offsetWithinLeading, formattedLeadingSpaces);
+    }
+
+    if (sourceColumn <= sourceContentEnd) {
+      const offsetWithinContent = Math.min(sourceColumn - sourceCell.contentStart, sourceCell.contentLength);
+      return formattedNormalized.rawOffset + formattedCell.contentStart + Math.min(offsetWithinContent, formattedCell.contentLength);
+    }
+
+    const offsetWithinTrailing = Math.min(sourceColumn - sourceContentEnd, sourceTrailingSpaces);
+    return formattedNormalized.rawOffset + formattedContentEnd + Math.min(offsetWithinTrailing, formattedTrailingSpaces);
+  }
+
+  private normalizeTableLine(line: string): { text: string; rawOffset: number } {
+    const prefixLength = getBlockquotePrefix(line).length;
+    const withoutPrefix = line.slice(prefixLength);
+    const trimStartLength = withoutPrefix.length - withoutPrefix.trimStart().length;
+
+    return {
+      text: withoutPrefix.trim(),
+      rawOffset: prefixLength + trimStartLength
+    };
   }
 
   async loadSettings(): Promise<void> {
