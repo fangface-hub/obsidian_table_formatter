@@ -1,6 +1,6 @@
 {
   "name": "obsidian-table-formatter",
-  "version": "0.1.3",
+  "version": "1.0.0",
   "description": "An Obsidian plugin that formats Markdown tables on save.",
   "main": "main.js",
   "scripts": {
@@ -8,7 +8,9 @@
     "dev": "node esbuild.config.mjs",
     "lint": "eslint main.ts --max-warnings=0",
     "lint:fix": "eslint main.ts --fix --max-warnings=0",
-    "version:patch": "node scripts/bump-patch-version.mjs"
+    "version:patch": "node scripts/bump-patch-version.mjs",
+    "version:minor": "node scripts/bump-minor-version.mjs",
+    "version:major": "node scripts/bump-major-version.mjs"
   },
   "keywords": [
     "obsidian",

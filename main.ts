@@ -7,7 +7,8 @@ import {
     PluginSettingTab,
     Setting,
     TAbstractFile,
-    TFile
+    TFile,
+    livePreviewState
 } from "obsidian";
 
 interface TableFormatterSettings {
@@ -32,23 +33,15 @@ export default class TableFormatterPlugin extends Plugin {
     await this.loadSettings();
     this.addSettingTab(new TableFormatterSettingTab(this.app, this));
 
+    this.addRibbonIcon("table", "Format tables in active file", () => {
+      void this.formatActiveFile();
+    });
+
     this.addCommand({
       id: "format-active-markdown-tables",
       name: "Format tables in active file",
       callback: async () => {
-        const activeFile = this.app.workspace.getActiveFile();
-        if (!(activeFile instanceof TFile) || activeFile.extension !== "md") {
-          new Notice("No active Markdown file.");
-          return;
-        }
-
-        const changed = await this.formatFile(activeFile);
-        if (changed) {
-          new Notice("Tables formatted in active file.");
-          return;
-        }
-
-        new Notice("No table changes were needed.");
+        await this.formatActiveFile();
       }
     });
 
@@ -61,8 +54,29 @@ export default class TableFormatterPlugin extends Plugin {
     this.processingFiles.clear();
   }
 
+  private async formatActiveFile(): Promise<void> {
+    const activeFile = this.app.workspace.getActiveFile();
+    if (!(activeFile instanceof TFile) || activeFile.extension !== "md") {
+      new Notice("No active Markdown file.");
+      return;
+    }
+
+    const changed = await this.formatFile(activeFile);
+    if (changed) {
+      new Notice("Tables formatted in active file.");
+      return;
+    }
+
+    new Notice("No table changes were needed.");
+  }
+
   private async handleModify(file: TAbstractFile): Promise<void> {
     if (!(file instanceof TFile) || file.extension !== "md") {
+      return;
+    }
+
+    const activeEditingView = this.getActiveEditingView(file);
+    if (activeEditingView && this.isLivePreviewView(activeEditingView)) {
       return;
     }
 
@@ -107,6 +121,27 @@ export default class TableFormatterPlugin extends Plugin {
     }
 
     return activeView;
+  }
+
+  private isLivePreviewView(view: MarkdownView): boolean {
+    const editorWithCodeMirror = view.editor as unknown as {
+      cm?: {
+        state?: {
+          field?: (plugin: unknown, require?: boolean) => unknown;
+        };
+      };
+    };
+
+    const readStateField = editorWithCodeMirror.cm?.state?.field;
+    if (typeof readStateField !== "function") {
+      return false;
+    }
+
+    try {
+      return readStateField(livePreviewState, false) !== undefined;
+    } catch {
+      return false;
+    }
   }
 
   private captureEditorState(view: MarkdownView) {
@@ -344,6 +379,7 @@ class TableFormatterSettingTab extends PluginSettingTab {
             await this.plugin.saveSettings();
           });
       });
+
   }
 }
 

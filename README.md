@@ -5,6 +5,8 @@ An Obsidian plugin for formatting Markdown tables on save.
 ## Features
 
 - Formats Markdown tables whenever a Markdown file is saved.
+- Suppresses auto-format while editing in Live Preview mode.
+- Lets you format manually with the ribbon button (table icon) or the command palette.
 - Supports configurable table cell padding:
   - Fixed number of spaces (`0` or more)
   - Blank (auto mode: single-space minimal formatting)
@@ -50,8 +52,17 @@ Note: `npm run build` runs lint first via `esbuild.config.mjs`.
 
 ## Community Plugin Release
 
-1. Bump the patch version by running `npm run version:patch`.
-1. This executes `node scripts/bump-patch-version.mjs` and updates `package.json`, `package-lock.json`, `manifest.json`, and `versions.json` together.
+Use one of the following version bump scripts depending on the scope of changes:
+
+- `npm run version:patch`
+  - For backward-compatible fixes only (`x.y.z` -> `x.y.(z+1)`)
+- `npm run version:minor`
+  - For backward-compatible feature additions (`x.y.z` -> `x.(y+1).0`)
+- `npm run version:major`
+  - For breaking changes (`x.y.z` -> `(x+1).0.0`)
+
+Each script updates `package.json`, `package-lock.json`, `manifest.json`, and `versions.json` together.
+
 1. Commit and push to GitHub.
 1. Create a GitHub Release with tag exactly matching `manifest.json` version.
 1. Attach release assets: `main.js`, `manifest.json`, `styles.css` (optional), `versions.json` (recommended).

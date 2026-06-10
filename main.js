@@ -37,21 +37,14 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
   async onload() {
     await this.loadSettings();
     this.addSettingTab(new TableFormatterSettingTab(this.app, this));
+    this.addRibbonIcon("table", "Format tables in active file", () => {
+      void this.formatActiveFile();
+    });
     this.addCommand({
       id: "format-active-markdown-tables",
       name: "Format tables in active file",
       callback: async () => {
-        const activeFile = this.app.workspace.getActiveFile();
-        if (!(activeFile instanceof import_obsidian.TFile) || activeFile.extension !== "md") {
-          new import_obsidian.Notice("No active Markdown file.");
-          return;
-        }
-        const changed = await this.formatFile(activeFile);
-        if (changed) {
-          new import_obsidian.Notice("Tables formatted in active file.");
-          return;
-        }
-        new import_obsidian.Notice("No table changes were needed.");
+        await this.formatActiveFile();
       }
     });
     this.registerEvent(this.app.vault.on("modify", (file) => {
@@ -61,8 +54,25 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
   onunload() {
     this.processingFiles.clear();
   }
+  async formatActiveFile() {
+    const activeFile = this.app.workspace.getActiveFile();
+    if (!(activeFile instanceof import_obsidian.TFile) || activeFile.extension !== "md") {
+      new import_obsidian.Notice("No active Markdown file.");
+      return;
+    }
+    const changed = await this.formatFile(activeFile);
+    if (changed) {
+      new import_obsidian.Notice("Tables formatted in active file.");
+      return;
+    }
+    new import_obsidian.Notice("No table changes were needed.");
+  }
   async handleModify(file) {
     if (!(file instanceof import_obsidian.TFile) || file.extension !== "md") {
+      return;
+    }
+    const activeEditingView = this.getActiveEditingView(file);
+    if (activeEditingView && this.isLivePreviewView(activeEditingView)) {
       return;
     }
     await this.formatFile(file);
@@ -99,6 +109,18 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
       return null;
     }
     return activeView;
+  }
+  isLivePreviewView(view) {
+    const editorWithCodeMirror = view.editor;
+    const readStateField = editorWithCodeMirror.cm?.state?.field;
+    if (typeof readStateField !== "function") {
+      return false;
+    }
+    try {
+      return readStateField(import_obsidian.livePreviewState, false) !== void 0;
+    } catch {
+      return false;
+    }
   }
   captureEditorState(view) {
     const editor = view.editor;
