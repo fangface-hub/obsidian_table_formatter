@@ -31,7 +31,12 @@ export default class TableFormatterPlugin extends Plugin {
 
   async onload(): Promise<void> {
     await this.loadSettings();
-    this.addSettingTab(new TableFormatterSettingTab(this.app, this));
+    
+    try {
+      this.addSettingTab(new TableFormatterSettingTab(this.app, this));
+    } catch (error) {
+      console.error("Failed to add setting tab:", error);
+    }
 
     this.addRibbonIcon("table", "Format tables in active file", () => {
       void this.formatActiveFile();
@@ -45,13 +50,37 @@ export default class TableFormatterPlugin extends Plugin {
       }
     });
 
+    // ソースコードビューの場合は自動フォーマット。
+    // ライブビュー中はスキップ
     this.registerEvent(this.app.vault.on("modify", (file) => {
+      if (!(file instanceof TFile) || file.extension !== "md") {
+        return;
+      }
+
+      const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+      if (!activeView || activeView.file?.path !== file.path) {
+        return;
+      }
+
+      // ライブビューが有効な場合はスキップ（両方の判定を使用）
+      if (activeView.getMode() !== "source" || this.isLivePreviewView(activeView)) {
+        return;
+      }
+
       void this.handleModify(file);
     }));
   }
 
   onunload(): void {
     this.processingFiles.clear();
+  }
+
+  private async handleModify(file: TAbstractFile): Promise<void> {
+    if (!(file instanceof TFile) || file.extension !== "md") {
+      return;
+    }
+
+    await this.formatFile(file);
   }
 
   private async formatActiveFile(): Promise<void> {
@@ -68,19 +97,6 @@ export default class TableFormatterPlugin extends Plugin {
     }
 
     new Notice("No table changes were needed.");
-  }
-
-  private async handleModify(file: TAbstractFile): Promise<void> {
-    if (!(file instanceof TFile) || file.extension !== "md") {
-      return;
-    }
-
-    const activeEditingView = this.getActiveEditingView(file);
-    if (activeEditingView && this.isLivePreviewView(activeEditingView)) {
-      return;
-    }
-
-    await this.formatFile(file);
   }
 
   private async formatFile(file: TFile): Promise<boolean> {
@@ -164,6 +180,11 @@ export default class TableFormatterPlugin extends Plugin {
     await this.waitForEditorFlush();
 
     if (view.file?.path === undefined || view.getMode() !== "source") {
+      return;
+    }
+
+    // ライブプレビュー中はフォーカス制御を抑止する
+    if (this.isLivePreviewView(view)) {
       return;
     }
 
@@ -323,63 +344,66 @@ class TableFormatterSettingTab extends PluginSettingTab {
   }
 
   display(): void {
-    const { containerEl } = this;
-    containerEl.empty();
+    try {
+      const { containerEl } = this;
+      containerEl.empty();
 
-    new Setting(containerEl)
-      .setName("Padding spaces")
-      .setDesc("Set the number of spaces around each cell. Leave blank for auto (single space).")
-      .addText((text) => {
-        text
-          .setPlaceholder("blank or 0+")
-          .setValue(this.plugin.settings.paddingSpaces === null ? "" : String(this.plugin.settings.paddingSpaces))
-          .onChange(async (value) => {
-            const trimmed = value.trim();
-            if (trimmed === "") {
-              this.plugin.settings.paddingSpaces = null;
+      new Setting(containerEl)
+        .setName("Padding spaces")
+        .setDesc("Set the number of spaces around each cell. Leave blank for auto (single space).")
+        .addText((text) => {
+          text
+            .setPlaceholder("blank or 0+")
+            .setValue(this.plugin.settings.paddingSpaces === null ? "" : String(this.plugin.settings.paddingSpaces))
+            .onChange(async (value) => {
+              const trimmed = value.trim();
+              if (trimmed === "") {
+                this.plugin.settings.paddingSpaces = null;
+                await this.plugin.saveSettings();
+                return;
+              }
+
+              const parsed = Number(trimmed);
+              if (!Number.isInteger(parsed) || parsed < 0) {
+                new Notice("Padding spaces must be an integer >= 0 or blank.");
+                text.setValue(this.plugin.settings.paddingSpaces === null ? "" : String(this.plugin.settings.paddingSpaces));
+                return;
+              }
+
+              this.plugin.settings.paddingSpaces = parsed;
               await this.plugin.saveSettings();
-              return;
-            }
+            });
+        });
 
-            const parsed = Number(trimmed);
-            if (!Number.isInteger(parsed) || parsed < 0) {
-              new Notice("Padding spaces must be an integer >= 0 or blank.");
-              text.setValue(this.plugin.settings.paddingSpaces === null ? "" : String(this.plugin.settings.paddingSpaces));
-              return;
-            }
+      new Setting(containerEl)
+        .setName("Table border dash count")
+        .setDesc("Number of hyphens for each delimiter cell in the table separator row. Leave blank for auto.")
+        .addText((text) => {
+          text
+            .setPlaceholder("blank or 1+")
+            .setValue(this.plugin.settings.dashCount === null ? "" : String(this.plugin.settings.dashCount))
+            .onChange(async (value) => {
+              const trimmed = value.trim();
+              if (trimmed === "") {
+                this.plugin.settings.dashCount = null;
+                await this.plugin.saveSettings();
+                return;
+              }
 
-            this.plugin.settings.paddingSpaces = parsed;
-            await this.plugin.saveSettings();
-          });
-      });
+              const parsed = Number(trimmed);
+              if (!Number.isInteger(parsed) || parsed < 1) {
+                new Notice("Dash count must be an integer >= 1 or blank.");
+                text.setValue(this.plugin.settings.dashCount === null ? "" : String(this.plugin.settings.dashCount));
+                return;
+              }
 
-    new Setting(containerEl)
-      .setName("Table border dash count")
-      .setDesc("Number of hyphens for each delimiter cell in the table separator row. Leave blank for auto.")
-      .addText((text) => {
-        text
-          .setPlaceholder("blank or 1+")
-          .setValue(this.plugin.settings.dashCount === null ? "" : String(this.plugin.settings.dashCount))
-          .onChange(async (value) => {
-            const trimmed = value.trim();
-            if (trimmed === "") {
-              this.plugin.settings.dashCount = null;
+              this.plugin.settings.dashCount = parsed;
               await this.plugin.saveSettings();
-              return;
-            }
-
-            const parsed = Number(trimmed);
-            if (!Number.isInteger(parsed) || parsed < 1) {
-              new Notice("Dash count must be an integer >= 1 or blank.");
-              text.setValue(this.plugin.settings.dashCount === null ? "" : String(this.plugin.settings.dashCount));
-              return;
-            }
-
-            this.plugin.settings.dashCount = parsed;
-            await this.plugin.saveSettings();
-          });
-      });
-
+            });
+        });
+    } catch (error) {
+      console.error("Error displaying settings:", error);
+    }
   }
 }
 

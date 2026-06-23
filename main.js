@@ -36,7 +36,11 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
   }
   async onload() {
     await this.loadSettings();
-    this.addSettingTab(new TableFormatterSettingTab(this.app, this));
+    try {
+      this.addSettingTab(new TableFormatterSettingTab(this.app, this));
+    } catch (error) {
+      console.error("Failed to add setting tab:", error);
+    }
     this.addRibbonIcon("table", "Format tables in active file", () => {
       void this.formatActiveFile();
     });
@@ -48,11 +52,27 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
       }
     });
     this.registerEvent(this.app.vault.on("modify", (file) => {
+      if (!(file instanceof import_obsidian.TFile) || file.extension !== "md") {
+        return;
+      }
+      const activeView = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
+      if (!activeView || activeView.file?.path !== file.path) {
+        return;
+      }
+      if (activeView.getMode() !== "source" || this.isLivePreviewView(activeView)) {
+        return;
+      }
       void this.handleModify(file);
     }));
   }
   onunload() {
     this.processingFiles.clear();
+  }
+  async handleModify(file) {
+    if (!(file instanceof import_obsidian.TFile) || file.extension !== "md") {
+      return;
+    }
+    await this.formatFile(file);
   }
   async formatActiveFile() {
     const activeFile = this.app.workspace.getActiveFile();
@@ -66,16 +86,6 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
       return;
     }
     new import_obsidian.Notice("No table changes were needed.");
-  }
-  async handleModify(file) {
-    if (!(file instanceof import_obsidian.TFile) || file.extension !== "md") {
-      return;
-    }
-    const activeEditingView = this.getActiveEditingView(file);
-    if (activeEditingView && this.isLivePreviewView(activeEditingView)) {
-      return;
-    }
-    await this.formatFile(file);
   }
   async formatFile(file) {
     if (this.processingFiles.has(file.path)) {
@@ -135,6 +145,9 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
   async restoreEditorState(view, state, sourceContent, formattedContent) {
     await this.waitForEditorFlush();
     if (view.file?.path === void 0 || view.getMode() !== "source") {
+      return;
+    }
+    if (this.isLivePreviewView(view)) {
       return;
     }
     const editor = view.editor;
@@ -254,44 +267,48 @@ var TableFormatterSettingTab = class extends import_obsidian.PluginSettingTab {
     this.plugin = plugin;
   }
   display() {
-    const { containerEl } = this;
-    containerEl.empty();
-    new import_obsidian.Setting(containerEl).setName("Padding spaces").setDesc("Set the number of spaces around each cell. Leave blank for auto (single space).").addText((text) => {
-      text.setPlaceholder("blank or 0+").setValue(this.plugin.settings.paddingSpaces === null ? "" : String(this.plugin.settings.paddingSpaces)).onChange(async (value) => {
-        const trimmed = value.trim();
-        if (trimmed === "") {
-          this.plugin.settings.paddingSpaces = null;
+    try {
+      const { containerEl } = this;
+      containerEl.empty();
+      new import_obsidian.Setting(containerEl).setName("Padding spaces").setDesc("Set the number of spaces around each cell. Leave blank for auto (single space).").addText((text) => {
+        text.setPlaceholder("blank or 0+").setValue(this.plugin.settings.paddingSpaces === null ? "" : String(this.plugin.settings.paddingSpaces)).onChange(async (value) => {
+          const trimmed = value.trim();
+          if (trimmed === "") {
+            this.plugin.settings.paddingSpaces = null;
+            await this.plugin.saveSettings();
+            return;
+          }
+          const parsed = Number(trimmed);
+          if (!Number.isInteger(parsed) || parsed < 0) {
+            new import_obsidian.Notice("Padding spaces must be an integer >= 0 or blank.");
+            text.setValue(this.plugin.settings.paddingSpaces === null ? "" : String(this.plugin.settings.paddingSpaces));
+            return;
+          }
+          this.plugin.settings.paddingSpaces = parsed;
           await this.plugin.saveSettings();
-          return;
-        }
-        const parsed = Number(trimmed);
-        if (!Number.isInteger(parsed) || parsed < 0) {
-          new import_obsidian.Notice("Padding spaces must be an integer >= 0 or blank.");
-          text.setValue(this.plugin.settings.paddingSpaces === null ? "" : String(this.plugin.settings.paddingSpaces));
-          return;
-        }
-        this.plugin.settings.paddingSpaces = parsed;
-        await this.plugin.saveSettings();
+        });
       });
-    });
-    new import_obsidian.Setting(containerEl).setName("Table border dash count").setDesc("Number of hyphens for each delimiter cell in the table separator row. Leave blank for auto.").addText((text) => {
-      text.setPlaceholder("blank or 1+").setValue(this.plugin.settings.dashCount === null ? "" : String(this.plugin.settings.dashCount)).onChange(async (value) => {
-        const trimmed = value.trim();
-        if (trimmed === "") {
-          this.plugin.settings.dashCount = null;
+      new import_obsidian.Setting(containerEl).setName("Table border dash count").setDesc("Number of hyphens for each delimiter cell in the table separator row. Leave blank for auto.").addText((text) => {
+        text.setPlaceholder("blank or 1+").setValue(this.plugin.settings.dashCount === null ? "" : String(this.plugin.settings.dashCount)).onChange(async (value) => {
+          const trimmed = value.trim();
+          if (trimmed === "") {
+            this.plugin.settings.dashCount = null;
+            await this.plugin.saveSettings();
+            return;
+          }
+          const parsed = Number(trimmed);
+          if (!Number.isInteger(parsed) || parsed < 1) {
+            new import_obsidian.Notice("Dash count must be an integer >= 1 or blank.");
+            text.setValue(this.plugin.settings.dashCount === null ? "" : String(this.plugin.settings.dashCount));
+            return;
+          }
+          this.plugin.settings.dashCount = parsed;
           await this.plugin.saveSettings();
-          return;
-        }
-        const parsed = Number(trimmed);
-        if (!Number.isInteger(parsed) || parsed < 1) {
-          new import_obsidian.Notice("Dash count must be an integer >= 1 or blank.");
-          text.setValue(this.plugin.settings.dashCount === null ? "" : String(this.plugin.settings.dashCount));
-          return;
-        }
-        this.plugin.settings.dashCount = parsed;
-        await this.plugin.saveSettings();
+        });
       });
-    });
+    } catch (error) {
+      console.error("Error displaying settings:", error);
+    }
   }
 };
 function formatMarkdownTables(content, settings) {
