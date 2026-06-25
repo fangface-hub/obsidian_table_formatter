@@ -241,9 +241,7 @@ export function detectColumnAlignment(cell: string): ColumnAlignment {
 }
 
 function buildDelimiterCell(dashCount: number, alignment: ColumnAlignment): string {
-  const totalWidth = Math.max(1, dashCount);
-  const colonCount = alignment === "center" ? 2 : alignment === "none" ? 0 : 1;
-  const dashes = "-".repeat(Math.max(1, totalWidth - colonCount));
+  const dashes = "-".repeat(Math.max(1, dashCount));
   const leadingColon = alignment === "left" || alignment === "center" ? ":" : "";
   const trailingColon = alignment === "right" || alignment === "center" ? ":" : "";
 
