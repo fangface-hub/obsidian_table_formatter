@@ -8,6 +8,7 @@
     "dev": "node esbuild.config.mjs",
     "lint": "eslint main.ts --max-warnings=0",
     "lint:fix": "eslint main.ts --fix --max-warnings=0",
+    "test": "node --import tsx --test tests/tableFormatter.test.ts",
     "version:patch": "node scripts/bump-patch-version.mjs",
     "version:minor": "node scripts/bump-minor-version.mjs",
     "version:major": "node scripts/bump-major-version.mjs"
@@ -29,6 +30,7 @@
     "eslint-plugin-obsidianmd": "^0.1.9",
     "obsidian": "latest",
     "tslib": "^2.7.0",
+    "tsx": "^4.19.2",
     "typescript": "^5.5.4"
   }
 }
