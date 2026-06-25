@@ -7,6 +7,7 @@ An Obsidian plugin for formatting Markdown tables on save.
 - Formats Markdown tables whenever a Markdown file is saved.
 - Suppresses auto-format while editing in Live Preview mode.
 - Lets you format manually with the ribbon button (table icon) or the command palette.
+- Can format every Markdown file in the vault at once with the command "Format tables in all files", which is handy when you first add the plugin to an existing vault. It asks for confirmation first and reports how many files were changed.
 - Supports configurable table cell padding:
   - Fixed number of spaces (`0` or more)
   - Blank (auto mode: single-space minimal formatting)
