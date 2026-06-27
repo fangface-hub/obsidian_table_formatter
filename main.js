@@ -28,7 +28,8 @@ var import_obsidian = require("obsidian");
 // tableFormatter.ts
 var DEFAULT_SETTINGS = {
   paddingSpaces: null,
-  dashCount: null
+  dashCount: null,
+  editingAssistEnabled: true
 };
 function formatMarkdownTables(content, settings) {
   const lines = content.split(/\r?\n/);
@@ -235,6 +236,8 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
     super(...arguments);
     this.settings = DEFAULT_SETTINGS;
     this.processingFiles = /* @__PURE__ */ new Set();
+    this.toggleRibbonEl = null;
+    this.toggleStatusBarEl = null;
   }
   async onload() {
     await this.loadSettings();
@@ -246,11 +249,27 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
     this.addRibbonIcon("table", "Format tables in active file", () => {
       void this.formatActiveFile();
     });
+    this.toggleRibbonEl = this.addRibbonIcon("power", "", () => {
+      void this.toggleEditingAssist();
+    });
+    this.toggleStatusBarEl = this.addStatusBarItem();
+    this.toggleStatusBarEl.addClass("mod-clickable");
+    this.toggleStatusBarEl.addEventListener("click", () => {
+      void this.toggleEditingAssist();
+    });
+    this.refreshToggleRibbonButton();
     this.addCommand({
       id: "format-active-markdown-tables",
       name: "Format tables in active file",
       callback: async () => {
         await this.formatActiveFile();
+      }
+    });
+    this.addCommand({
+      id: "toggle-editing-assist",
+      name: "Toggle auto-format and focus control while editing",
+      callback: async () => {
+        await this.toggleEditingAssist();
       }
     });
     this.registerEvent(this.app.vault.on("modify", (file) => {
@@ -261,7 +280,10 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
       if (!activeView || activeView.file?.path !== file.path) {
         return;
       }
-      if (activeView.getMode() !== "source" || this.isLivePreviewView(activeView)) {
+      if (activeView.getMode() !== "source") {
+        return;
+      }
+      if (!this.settings.editingAssistEnabled) {
         return;
       }
       void this.handleModify(file);
@@ -322,18 +344,6 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
     }
     return activeView;
   }
-  isLivePreviewView(view) {
-    const editorWithCodeMirror = view.editor;
-    const readStateField = editorWithCodeMirror.cm?.state?.field;
-    if (typeof readStateField !== "function") {
-      return false;
-    }
-    try {
-      return readStateField(import_obsidian.livePreviewState, false) !== void 0;
-    } catch {
-      return false;
-    }
-  }
   captureEditorState(view) {
     const editor = view.editor;
     return {
@@ -349,7 +359,7 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
     if (view.file?.path === void 0 || view.getMode() !== "source") {
       return;
     }
-    if (this.isLivePreviewView(view)) {
+    if (!this.settings.editingAssistEnabled) {
       return;
     }
     const editor = view.editor;
@@ -452,15 +462,35 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
     const loaded = data ?? {};
     const paddingSpaces = Number.isInteger(loaded.paddingSpaces) && loaded.paddingSpaces >= 0 ? loaded.paddingSpaces : null;
     const dashCount = Number.isInteger(loaded.dashCount) && loaded.dashCount >= 1 ? loaded.dashCount : null;
+    const editingAssistEnabled = typeof loaded.editingAssistEnabled === "boolean" ? loaded.editingAssistEnabled : DEFAULT_SETTINGS.editingAssistEnabled;
     this.settings = {
       ...DEFAULT_SETTINGS,
       ...loaded,
       paddingSpaces,
-      dashCount
+      dashCount,
+      editingAssistEnabled
     };
   }
   async saveSettings() {
     await this.saveData(this.settings);
+  }
+  refreshToggleRibbonButton() {
+    const enabled = this.settings.editingAssistEnabled;
+    const label = enabled ? "Disable auto-format and focus control while editing" : "Enable auto-format and focus control while editing";
+    if (this.toggleRibbonEl) {
+      this.toggleRibbonEl.setAttribute("aria-label", label);
+      this.toggleRibbonEl.classList.toggle("is-active", enabled);
+    }
+    if (this.toggleStatusBarEl) {
+      this.toggleStatusBarEl.setAttribute("aria-label", label);
+      this.toggleStatusBarEl.setText(`Table Formatter: ${enabled ? "ON" : "OFF"}`);
+    }
+  }
+  async toggleEditingAssist() {
+    this.settings.editingAssistEnabled = !this.settings.editingAssistEnabled;
+    await this.saveSettings();
+    this.refreshToggleRibbonButton();
+    new import_obsidian.Notice(this.settings.editingAssistEnabled ? "Auto-format and focus control enabled while editing." : "Auto-format and focus control disabled while editing.");
   }
 };
 var TableFormatterSettingTab = class extends import_obsidian.PluginSettingTab {
@@ -506,6 +536,13 @@ var TableFormatterSettingTab = class extends import_obsidian.PluginSettingTab {
           }
           this.plugin.settings.dashCount = parsed;
           await this.plugin.saveSettings();
+        });
+      });
+      new import_obsidian.Setting(containerEl).setName("Enable auto-format and focus control while editing").setDesc("Controls modify-triggered table formatting and focus/selection restoration in Source mode.").addToggle((toggle) => {
+        toggle.setValue(this.plugin.settings.editingAssistEnabled).onChange(async (value) => {
+          this.plugin.settings.editingAssistEnabled = value;
+          await this.plugin.saveSettings();
+          this.plugin.refreshToggleRibbonButton();
         });
       });
     } catch (error) {

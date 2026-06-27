@@ -1,11 +1,13 @@
 export interface TableFormatterSettings {
   paddingSpaces: number | null;
   dashCount: number | null;
+  editingAssistEnabled: boolean;
 }
 
 export const DEFAULT_SETTINGS: TableFormatterSettings = {
   paddingSpaces: null,
-  dashCount: null
+  dashCount: null,
+  editingAssistEnabled: true
 };
 
 export type ColumnAlignment = "none" | "left" | "right" | "center";
