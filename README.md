@@ -14,6 +14,7 @@ An Obsidian plugin for formatting Markdown tables on save.
   - Fixed number of spaces (`0` or more)
   - Blank (auto mode: single-space minimal formatting)
 - Supports configurable number of `-` characters in the delimiter row.
+- Keeps column alignment: the `:` markers in the delimiter row (`:---`, `---:`, `:---:`) are preserved.
 
 ## Settings
 
@@ -24,7 +25,7 @@ Open: `Settings -> Community plugins -> Table Formatter`
   - Integer (`>= 0`): exactly that many spaces around each cell
 - `Table border dash count`
   - Blank: auto (based on content width, minimum `3`)
-  - Integer (`>= 1`): fixed number of `-` in delimiter cells (no `:`)
+  - Integer (`>= 1`): fixed number of `-` in each delimiter cell. Alignment colons (`:`) are kept and placed around the dashes, so a left-aligned column with dash count `3` becomes `:---`.
 - `Enable auto-format and focus control while editing`
   - ON: run modify-triggered formatting and focus/selection restoration in Source mode
   - OFF: force-disable those editing features
