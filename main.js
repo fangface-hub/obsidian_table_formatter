@@ -266,6 +266,13 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
       }
     });
     this.addCommand({
+      id: "format-all-markdown-tables",
+      name: "Format tables in all files",
+      callback: () => {
+        this.promptFormatAllFiles();
+      }
+    });
+    this.addCommand({
       id: "toggle-editing-assist",
       name: "Toggle auto-format and focus control while editing",
       callback: async () => {
@@ -313,6 +320,37 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
       return;
     }
     new import_obsidian.Notice("No table changes were needed.");
+  }
+  promptFormatAllFiles() {
+    const files = this.app.vault.getMarkdownFiles();
+    if (files.length === 0) {
+      new import_obsidian.Notice("No Markdown files to format.");
+      return;
+    }
+    new ConfirmFormatAllModal(this.app, files.length, () => {
+      void this.formatAllFiles();
+    }).open();
+  }
+  async formatAllFiles() {
+    const files = this.app.vault.getMarkdownFiles();
+    if (files.length === 0) {
+      new import_obsidian.Notice("No Markdown files to format.");
+      return;
+    }
+    let changed = 0;
+    let failed = 0;
+    for (const file of files) {
+      try {
+        if (await this.formatFile(file)) {
+          changed += 1;
+        }
+      } catch (error) {
+        failed += 1;
+        console.error("table-formatter: failed to format", file.path, error);
+      }
+    }
+    const base = `Formatted tables in ${changed} of ${files.length} files.`;
+    new import_obsidian.Notice(failed > 0 ? `${base} ${failed} could not be processed.` : base);
   }
   async formatFile(file) {
     if (this.processingFiles.has(file.path)) {
@@ -563,5 +601,33 @@ var TableFormatterSettingTab = class extends import_obsidian.PluginSettingTab {
     } catch (error) {
       console.error("Error displaying settings:", error);
     }
+  }
+};
+var ConfirmFormatAllModal = class extends import_obsidian.Modal {
+  constructor(app, fileCount, onConfirm) {
+    super(app);
+    this.fileCount = fileCount;
+    this.onConfirm = onConfirm;
+  }
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h3", { text: "Format tables in all files" });
+    contentEl.createEl("p", {
+      text: `This rewrites Markdown tables in ${this.fileCount} files across the vault. It cannot be undone in one step, so make sure your vault is backed up or under version control.`
+    });
+    const buttons = contentEl.createDiv({ cls: "modal-button-container" });
+    const confirmButton = buttons.createEl("button", { text: "Format all files", cls: "mod-cta" });
+    confirmButton.addEventListener("click", () => {
+      this.close();
+      this.onConfirm();
+    });
+    const cancelButton = buttons.createEl("button", { text: "Cancel" });
+    cancelButton.addEventListener("click", () => {
+      this.close();
+    });
+  }
+  onClose() {
+    this.contentEl.empty();
   }
 };

@@ -1,22 +1,23 @@
 import {
-    App,
-    EditorPosition,
-    MarkdownView,
-    Notice,
-    Plugin,
-    PluginSettingTab,
-    Setting,
-    TAbstractFile,
-    TFile,
-    livePreviewState
+  App,
+  EditorPosition,
+  MarkdownView,
+  Modal,
+  Notice,
+  Plugin,
+  PluginSettingTab,
+  Setting,
+  TAbstractFile,
+  TFile,
+  livePreviewState
 } from "obsidian";
 import {
-    DEFAULT_SETTINGS,
-    TableFormatterSettings,
-    formatMarkdownTables,
-    getBlockquotePrefix,
-    looksLikeTableRow,
-    parseRowLayout
+  DEFAULT_SETTINGS,
+  TableFormatterSettings,
+  formatMarkdownTables,
+  getBlockquotePrefix,
+  looksLikeTableRow,
+  parseRowLayout
 } from "./tableFormatter";
 
 export default class TableFormatterPlugin extends Plugin {
@@ -55,6 +56,14 @@ export default class TableFormatterPlugin extends Plugin {
       name: "Format tables in active file",
       callback: async () => {
         await this.formatActiveFile();
+      }
+    });
+
+    this.addCommand({
+      id: "format-all-markdown-tables",
+      name: "Format tables in all files",
+      callback: () => {
+        this.promptFormatAllFiles();
       }
     });
 
@@ -120,6 +129,42 @@ export default class TableFormatterPlugin extends Plugin {
     }
 
     new Notice("No table changes were needed.");
+  }
+
+  private promptFormatAllFiles(): void {
+    const files = this.app.vault.getMarkdownFiles();
+    if (files.length === 0) {
+      new Notice("No Markdown files to format.");
+      return;
+    }
+
+    new ConfirmFormatAllModal(this.app, files.length, () => {
+      void this.formatAllFiles();
+    }).open();
+  }
+
+  private async formatAllFiles(): Promise<void> {
+    const files = this.app.vault.getMarkdownFiles();
+    if (files.length === 0) {
+      new Notice("No Markdown files to format.");
+      return;
+    }
+
+    let changed = 0;
+    let failed = 0;
+    for (const file of files) {
+      try {
+        if (await this.formatFile(file)) {
+          changed += 1;
+        }
+      } catch (error) {
+        failed += 1;
+        console.error("table-formatter: failed to format", file.path, error);
+      }
+    }
+
+    const base = `Formatted tables in ${changed} of ${files.length} files.`;
+    new Notice(failed > 0 ? `${base} ${failed} could not be processed.` : base);
   }
 
   private async formatFile(file: TFile): Promise<boolean> {
@@ -470,5 +515,43 @@ class TableFormatterSettingTab extends PluginSettingTab {
     } catch (error) {
       console.error("Error displaying settings:", error);
     }
+  }
+}
+
+class ConfirmFormatAllModal extends Modal {
+  private readonly fileCount: number;
+  private readonly onConfirm: () => void;
+
+  constructor(app: App, fileCount: number, onConfirm: () => void) {
+    super(app);
+    this.fileCount = fileCount;
+    this.onConfirm = onConfirm;
+  }
+
+  onOpen(): void {
+    const { contentEl } = this;
+    contentEl.empty();
+
+    contentEl.createEl("h3", { text: "Format tables in all files" });
+    contentEl.createEl("p", {
+      text: `This rewrites Markdown tables in ${this.fileCount} files across the vault. It cannot be undone in one step, so make sure your vault is backed up or under version control.`
+    });
+
+    const buttons = contentEl.createDiv({ cls: "modal-button-container" });
+
+    const confirmButton = buttons.createEl("button", { text: "Format all files", cls: "mod-cta" });
+    confirmButton.addEventListener("click", () => {
+      this.close();
+      this.onConfirm();
+    });
+
+    const cancelButton = buttons.createEl("button", { text: "Cancel" });
+    cancelButton.addEventListener("click", () => {
+      this.close();
+    });
+  }
+
+  onClose(): void {
+    this.contentEl.empty();
   }
 }
