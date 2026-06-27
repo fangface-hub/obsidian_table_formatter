@@ -286,6 +286,9 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
       if (!this.settings.editingAssistEnabled) {
         return;
       }
+      if (this.isLivePreviewView(activeView)) {
+        return;
+      }
       void this.handleModify(file);
     }));
   }
@@ -344,6 +347,18 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
     }
     return activeView;
   }
+  isLivePreviewView(view) {
+    const editorWithCodeMirror = view.editor;
+    const readStateField = editorWithCodeMirror.cm?.state?.field;
+    if (typeof readStateField !== "function") {
+      return false;
+    }
+    try {
+      return readStateField(import_obsidian.livePreviewState, false) !== void 0;
+    } catch {
+      return false;
+    }
+  }
   captureEditorState(view) {
     const editor = view.editor;
     return {
@@ -359,7 +374,7 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
     if (view.file?.path === void 0 || view.getMode() !== "source") {
       return;
     }
-    if (!this.settings.editingAssistEnabled) {
+    if (!this.settings.editingAssistEnabled || this.isLivePreviewView(view)) {
       return;
     }
     const editor = view.editor;

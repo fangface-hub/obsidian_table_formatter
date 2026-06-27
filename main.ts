@@ -1,22 +1,22 @@
 import {
-  App,
-  EditorPosition,
-  MarkdownView,
-  Notice,
-  Plugin,
-  PluginSettingTab,
-  Setting,
-  TAbstractFile,
-  TFile,
-  livePreviewState
+    App,
+    EditorPosition,
+    MarkdownView,
+    Notice,
+    Plugin,
+    PluginSettingTab,
+    Setting,
+    TAbstractFile,
+    TFile,
+    livePreviewState
 } from "obsidian";
 import {
-  DEFAULT_SETTINGS,
-  TableFormatterSettings,
-  formatMarkdownTables,
-  getBlockquotePrefix,
-  looksLikeTableRow,
-  parseRowLayout
+    DEFAULT_SETTINGS,
+    TableFormatterSettings,
+    formatMarkdownTables,
+    getBlockquotePrefix,
+    looksLikeTableRow,
+    parseRowLayout
 } from "./tableFormatter";
 
 export default class TableFormatterPlugin extends Plugin {
