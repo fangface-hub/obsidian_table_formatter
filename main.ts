@@ -1,24 +1,25 @@
 import {
-    App,
-    EditorPosition,
-    MarkdownView,
-    Notice,
-    Plugin,
-    PluginSettingTab,
-    Setting,
-    TAbstractFile,
-    TFile,
-    livePreviewState
+  App,
+  EditorPosition,
+  MarkdownView,
+  Notice,
+  Plugin,
+  PluginSettingTab,
+  Setting,
+  TAbstractFile,
+  TFile
 } from "obsidian";
 
 interface TableFormatterSettings {
   paddingSpaces: number | null;
   dashCount: number | null;
+  editingAssistEnabled: boolean;
 }
 
 const DEFAULT_SETTINGS: TableFormatterSettings = {
   paddingSpaces: null,
-  dashCount: null
+  dashCount: null,
+  editingAssistEnabled: true
 };
 
 type ParsedTable = {
@@ -28,6 +29,8 @@ type ParsedTable = {
 export default class TableFormatterPlugin extends Plugin {
   settings: TableFormatterSettings = DEFAULT_SETTINGS;
   private processingFiles = new Set<string>();
+  private toggleRibbonEl: HTMLElement | null = null;
+  private toggleStatusBarEl: HTMLElement | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -42,6 +45,18 @@ export default class TableFormatterPlugin extends Plugin {
       void this.formatActiveFile();
     });
 
+    this.toggleRibbonEl = this.addRibbonIcon("power", "", () => {
+      void this.toggleEditingAssist();
+    });
+
+    this.toggleStatusBarEl = this.addStatusBarItem();
+    this.toggleStatusBarEl.addClass("mod-clickable");
+    this.toggleStatusBarEl.addEventListener("click", () => {
+      void this.toggleEditingAssist();
+    });
+
+    this.refreshToggleRibbonButton();
+
     this.addCommand({
       id: "format-active-markdown-tables",
       name: "Format tables in active file",
@@ -50,8 +65,15 @@ export default class TableFormatterPlugin extends Plugin {
       }
     });
 
+    this.addCommand({
+      id: "toggle-editing-assist",
+      name: "Toggle auto-format and focus control while editing",
+      callback: async () => {
+        await this.toggleEditingAssist();
+      }
+    });
+
     // ソースコードビューの場合は自動フォーマット。
-    // ライブビュー中はスキップ
     this.registerEvent(this.app.vault.on("modify", (file) => {
       if (!(file instanceof TFile) || file.extension !== "md") {
         return;
@@ -62,8 +84,11 @@ export default class TableFormatterPlugin extends Plugin {
         return;
       }
 
-      // ライブビューが有効な場合はスキップ（両方の判定を使用）
-      if (activeView.getMode() !== "source" || this.isLivePreviewView(activeView)) {
+      if (activeView.getMode() !== "source") {
+        return;
+      }
+
+      if (!this.settings.editingAssistEnabled) {
         return;
       }
 
@@ -139,27 +164,6 @@ export default class TableFormatterPlugin extends Plugin {
     return activeView;
   }
 
-  private isLivePreviewView(view: MarkdownView): boolean {
-    const editorWithCodeMirror = view.editor as unknown as {
-      cm?: {
-        state?: {
-          field?: (plugin: unknown, require?: boolean) => unknown;
-        };
-      };
-    };
-
-    const readStateField = editorWithCodeMirror.cm?.state?.field;
-    if (typeof readStateField !== "function") {
-      return false;
-    }
-
-    try {
-      return readStateField(livePreviewState, false) !== undefined;
-    } catch {
-      return false;
-    }
-  }
-
   private captureEditorState(view: MarkdownView) {
     const editor = view.editor;
     return {
@@ -183,8 +187,7 @@ export default class TableFormatterPlugin extends Plugin {
       return;
     }
 
-    // ライブプレビュー中はフォーカス制御を抑止する
-    if (this.isLivePreviewView(view)) {
+    if (!this.settings.editingAssistEnabled) {
       return;
     }
 
@@ -322,16 +325,47 @@ export default class TableFormatterPlugin extends Plugin {
       ? (loaded.dashCount as number)
       : null;
 
+    const editingAssistEnabled = typeof loaded.editingAssistEnabled === "boolean"
+      ? loaded.editingAssistEnabled
+      : DEFAULT_SETTINGS.editingAssistEnabled;
+
     this.settings = {
       ...DEFAULT_SETTINGS,
       ...loaded,
       paddingSpaces,
-      dashCount
+      dashCount,
+      editingAssistEnabled
     };
   }
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
+  }
+
+  refreshToggleRibbonButton(): void {
+    const enabled = this.settings.editingAssistEnabled;
+    const label = enabled
+      ? "Disable auto-format and focus control while editing"
+      : "Enable auto-format and focus control while editing";
+
+    if (this.toggleRibbonEl) {
+      this.toggleRibbonEl.setAttribute("aria-label", label);
+      this.toggleRibbonEl.classList.toggle("is-active", enabled);
+    }
+
+    if (this.toggleStatusBarEl) {
+      this.toggleStatusBarEl.setAttribute("aria-label", label);
+      this.toggleStatusBarEl.setText(`Table Formatter: ${enabled ? "ON" : "OFF"}`);
+    }
+  }
+
+  private async toggleEditingAssist(): Promise<void> {
+    this.settings.editingAssistEnabled = !this.settings.editingAssistEnabled;
+    await this.saveSettings();
+    this.refreshToggleRibbonButton();
+    new Notice(this.settings.editingAssistEnabled
+      ? "Auto-format and focus control enabled while editing."
+      : "Auto-format and focus control disabled while editing.");
   }
 }
 
@@ -399,6 +433,19 @@ class TableFormatterSettingTab extends PluginSettingTab {
 
               this.plugin.settings.dashCount = parsed;
               await this.plugin.saveSettings();
+            });
+        });
+
+      new Setting(containerEl)
+        .setName("Enable auto-format and focus control while editing")
+        .setDesc("Controls modify-triggered table formatting and focus/selection restoration in Source mode.")
+        .addToggle((toggle) => {
+          toggle
+            .setValue(this.plugin.settings.editingAssistEnabled)
+            .onChange(async (value) => {
+              this.plugin.settings.editingAssistEnabled = value;
+              await this.plugin.saveSettings();
+              this.plugin.refreshToggleRibbonButton();
             });
         });
     } catch (error) {

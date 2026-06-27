@@ -5,8 +5,11 @@ An Obsidian plugin for formatting Markdown tables on save.
 ## Features
 
 - Formats Markdown tables whenever a Markdown file is saved.
-- Suppresses auto-format while editing in Live Preview mode.
+- Runs auto-format only while editing in Source mode.
+- Applies focus/selection restoration only in Source mode.
 - Lets you format manually with the ribbon button (table icon) or the command palette.
+- Adds a ribbon toggle button (power icon) to force-enable/disable auto-format and focus control while editing.
+- Shows an ON/OFF toggle in the main screen status bar for quick switching.
 - Supports configurable table cell padding:
   - Fixed number of spaces (`0` or more)
   - Blank (auto mode: single-space minimal formatting)
@@ -22,6 +25,19 @@ Open: `Settings -> Community plugins -> Table Formatter`
 - `Table border dash count`
   - Blank: auto (based on content width, minimum `3`)
   - Integer (`>= 1`): fixed number of `-` in delimiter cells (no `:`)
+- `Enable auto-format and focus control while editing`
+  - ON: run modify-triggered formatting and focus/selection restoration in Source mode
+  - OFF: force-disable those editing features
+
+## Images
+
+- Editor screen
+
+![Editor Screen](./editor_image.drawio.svg)
+
+- Setting screen
+
+![Setting Screen](./setting_image.drawio.svg)
 
 ## Development
 
