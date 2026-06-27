@@ -5,13 +5,17 @@ An Obsidian plugin for formatting Markdown tables on save.
 ## Features
 
 - Formats Markdown tables whenever a Markdown file is saved.
-- Suppresses auto-format while editing in Live Preview mode.
+- Runs auto-format only while editing in Source mode.
+- Applies focus/selection restoration only in Source mode.
 - Lets you format manually with the ribbon button (table icon) or the command palette.
 - Can format every Markdown file in the vault at once with the command "Format tables in all files", which is handy when you first add the plugin to an existing vault. It asks for confirmation first and reports how many files were changed.
+- Adds a ribbon toggle button (power icon) to force-enable/disable auto-format and focus control while editing.
+- Shows an ON/OFF toggle in the main screen status bar for quick switching.
 - Supports configurable table cell padding:
   - Fixed number of spaces (`0` or more)
   - Blank (auto mode: single-space minimal formatting)
 - Supports configurable number of `-` characters in the delimiter row.
+- Keeps column alignment: the `:` markers in the delimiter row (`:---`, `---:`, `:---:`) are preserved.
 
 ## Settings
 
@@ -22,7 +26,20 @@ Open: `Settings -> Community plugins -> Table Formatter`
   - Integer (`>= 0`): exactly that many spaces around each cell
 - `Table border dash count`
   - Blank: auto (based on content width, minimum `3`)
-  - Integer (`>= 1`): fixed number of `-` in delimiter cells (no `:`)
+  - Integer (`>= 1`): fixed number of `-` in each delimiter cell. Alignment colons (`:`) are kept and placed around the dashes, so a left-aligned column with dash count `3` becomes `:---`.
+- `Enable auto-format and focus control while editing`
+  - ON: run modify-triggered formatting and focus/selection restoration in Source mode
+  - OFF: force-disable those editing features
+
+## Images
+
+- Editor screen
+
+![Editor Screen](./editor_image.drawio.svg)
+
+- Setting screen
+
+![Setting Screen](./setting_image.drawio.svg)
 
 ## Development
 

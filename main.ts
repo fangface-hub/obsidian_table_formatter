@@ -1,38 +1,34 @@
 import {
-    App,
-    EditorPosition,
-    MarkdownView,
-    Modal,
-    Notice,
-    Plugin,
-    PluginSettingTab,
-    Setting,
-    TAbstractFile,
-    TFile,
-    livePreviewState
+  App,
+  EditorPosition,
+  MarkdownView,
+  Modal,
+  Notice,
+  Plugin,
+  PluginSettingTab,
+  Setting,
+  TAbstractFile,
+  TFile,
+  livePreviewState
 } from "obsidian";
-
-interface TableFormatterSettings {
-  paddingSpaces: number | null;
-  dashCount: number | null;
-}
-
-const DEFAULT_SETTINGS: TableFormatterSettings = {
-  paddingSpaces: null,
-  dashCount: null
-};
-
-type ParsedTable = {
-  rows: string[][];
-};
+import {
+  DEFAULT_SETTINGS,
+  TableFormatterSettings,
+  formatMarkdownTables,
+  getBlockquotePrefix,
+  looksLikeTableRow,
+  parseRowLayout
+} from "./tableFormatter";
 
 export default class TableFormatterPlugin extends Plugin {
   settings: TableFormatterSettings = DEFAULT_SETTINGS;
   private processingFiles = new Set<string>();
+  private toggleRibbonEl: HTMLElement | null = null;
+  private toggleStatusBarEl: HTMLElement | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
-    
+
     try {
       this.addSettingTab(new TableFormatterSettingTab(this.app, this));
     } catch (error) {
@@ -42,6 +38,18 @@ export default class TableFormatterPlugin extends Plugin {
     this.addRibbonIcon("table", "Format tables in active file", () => {
       void this.formatActiveFile();
     });
+
+    this.toggleRibbonEl = this.addRibbonIcon("power", "", () => {
+      void this.toggleEditingAssist();
+    });
+
+    this.toggleStatusBarEl = this.addStatusBarItem();
+    this.toggleStatusBarEl.addClass("mod-clickable");
+    this.toggleStatusBarEl.addEventListener("click", () => {
+      void this.toggleEditingAssist();
+    });
+
+    this.refreshToggleRibbonButton();
 
     this.addCommand({
       id: "format-active-markdown-tables",
@@ -59,8 +67,15 @@ export default class TableFormatterPlugin extends Plugin {
       }
     });
 
-    // ソースコードビューの場合は自動フォーマット。
-    // ライブビュー中はスキップ
+    this.addCommand({
+      id: "toggle-editing-assist",
+      name: "Toggle auto-format and focus control while editing",
+      callback: async () => {
+        await this.toggleEditingAssist();
+      }
+    });
+
+    // In source mode, auto-format table edits when editing assist is enabled.
     this.registerEvent(this.app.vault.on("modify", (file) => {
       if (!(file instanceof TFile) || file.extension !== "md") {
         return;
@@ -71,8 +86,16 @@ export default class TableFormatterPlugin extends Plugin {
         return;
       }
 
-      // ライブビューが有効な場合はスキップ（両方の判定を使用）
-      if (activeView.getMode() !== "source" || this.isLivePreviewView(activeView)) {
+      if (activeView.getMode() !== "source") {
+        return;
+      }
+
+      if (!this.settings.editingAssistEnabled) {
+        return;
+      }
+
+      // Guard against forced focus behavior in Live Preview.
+      if (this.isLivePreviewView(activeView)) {
         return;
       }
 
@@ -228,8 +251,7 @@ export default class TableFormatterPlugin extends Plugin {
       return;
     }
 
-    // ライブプレビュー中はフォーカス制御を抑止する
-    if (this.isLivePreviewView(view)) {
+    if (!this.settings.editingAssistEnabled || this.isLivePreviewView(view)) {
       return;
     }
 
@@ -367,16 +389,47 @@ export default class TableFormatterPlugin extends Plugin {
       ? (loaded.dashCount as number)
       : null;
 
+    const editingAssistEnabled = typeof loaded.editingAssistEnabled === "boolean"
+      ? loaded.editingAssistEnabled
+      : DEFAULT_SETTINGS.editingAssistEnabled;
+
     this.settings = {
       ...DEFAULT_SETTINGS,
       ...loaded,
       paddingSpaces,
-      dashCount
+      dashCount,
+      editingAssistEnabled
     };
   }
 
   async saveSettings(): Promise<void> {
     await this.saveData(this.settings);
+  }
+
+  refreshToggleRibbonButton(): void {
+    const enabled = this.settings.editingAssistEnabled;
+    const label = enabled
+      ? "Disable auto-format and focus control while editing"
+      : "Enable auto-format and focus control while editing";
+
+    if (this.toggleRibbonEl) {
+      this.toggleRibbonEl.setAttribute("aria-label", label);
+      this.toggleRibbonEl.classList.toggle("is-active", enabled);
+    }
+
+    if (this.toggleStatusBarEl) {
+      this.toggleStatusBarEl.setAttribute("aria-label", label);
+      this.toggleStatusBarEl.setText(`Table Formatter: ${enabled ? "ON" : "OFF"}`);
+    }
+  }
+
+  private async toggleEditingAssist(): Promise<void> {
+    this.settings.editingAssistEnabled = !this.settings.editingAssistEnabled;
+    await this.saveSettings();
+    this.refreshToggleRibbonButton();
+    new Notice(this.settings.editingAssistEnabled
+      ? "Auto-format and focus control enabled while editing."
+      : "Auto-format and focus control disabled while editing.");
   }
 }
 
@@ -446,6 +499,19 @@ class TableFormatterSettingTab extends PluginSettingTab {
               await this.plugin.saveSettings();
             });
         });
+
+      new Setting(containerEl)
+        .setName("Enable auto-format and focus control while editing")
+        .setDesc("Controls modify-triggered table formatting and focus/selection restoration in Source mode.")
+        .addToggle((toggle) => {
+          toggle
+            .setValue(this.plugin.settings.editingAssistEnabled)
+            .onChange(async (value) => {
+              this.plugin.settings.editingAssistEnabled = value;
+              await this.plugin.saveSettings();
+              this.plugin.refreshToggleRibbonButton();
+            });
+        });
     } catch (error) {
       console.error("Error displaying settings:", error);
     }
@@ -488,242 +554,4 @@ class ConfirmFormatAllModal extends Modal {
   onClose(): void {
     this.contentEl.empty();
   }
-}
-
-function formatMarkdownTables(content: string, settings: TableFormatterSettings): string {
-  const lines = content.split(/\r?\n/);
-  const output: string[] = [];
-  let inCodeFence = false;
-
-  let i = 0;
-  while (i < lines.length) {
-    if (isFenceLine(lines[i])) {
-      inCodeFence = !inCodeFence;
-      output.push(lines[i]);
-      i += 1;
-      continue;
-    }
-
-    if (inCodeFence) {
-      output.push(lines[i]);
-      i += 1;
-      continue;
-    }
-
-    if (!isTableStart(lines, i)) {
-      output.push(lines[i]);
-      i += 1;
-      continue;
-    }
-
-    const start = i;
-    const tablePrefix = getBlockquotePrefix(lines[start]);
-    let end = i + 1;
-    while (end + 1 < lines.length && looksLikeTableRow(lines[end + 1])) {
-      end += 1;
-    }
-
-    const blockLines = lines.slice(start, end + 1);
-    const formatted = formatTableBlock(blockLines, settings, tablePrefix);
-    output.push(...formatted);
-    i = end + 1;
-  }
-
-  return output.join("\n");
-}
-
-function isFenceLine(line: string): boolean {
-  const trimmed = line.trimStart();
-  return trimmed.startsWith("```") || trimmed.startsWith("~~~");
-}
-
-function isTableStart(lines: string[], index: number): boolean {
-  if (index + 1 >= lines.length) {
-    return false;
-  }
-
-  const first = lines[index];
-  const second = lines[index + 1];
-
-  return looksLikeTableRow(first) && isDelimiterRow(second);
-}
-
-function looksLikeTableRow(line: string): boolean {
-  const trimmed = stripBlockquotePrefix(line).trim();
-  return trimmed.includes("|") && trimmed.length > 0;
-}
-
-function isDelimiterRow(line: string): boolean {
-  const cells = splitRow(line);
-  if (cells.length === 0) {
-    return false;
-  }
-
-  return cells.every((cell) => /^:?-{1,}:?$/.test(cell.trim()));
-}
-
-function splitRow(line: string): string[] {
-  const trimmed = stripBlockquotePrefix(line).trim();
-  let text = trimmed;
-
-  if (text.startsWith("|")) {
-    text = text.slice(1);
-  }
-  if (text.endsWith("|")) {
-    text = text.slice(0, -1);
-  }
-
-  return text.split("|").map((cell) => cell.trim());
-}
-
-function getBlockquotePrefix(line: string): string {
-  const match = line.match(/^\s*(?:>\s*)+/);
-  return match ? match[0] : "";
-}
-
-function stripBlockquotePrefix(line: string): string {
-  const prefix = getBlockquotePrefix(line);
-  if (!prefix) {
-    return line;
-  }
-
-  return line.slice(prefix.length);
-}
-
-type RowLayoutCell = {
-  start: number;
-  end: number;
-  contentStart: number;
-  contentLength: number;
-};
-
-type RowLayout = {
-  cells: RowLayoutCell[];
-};
-
-function parseRowLayout(line: string): RowLayout | null {
-  const trimmed = line.trim();
-  if (!trimmed.includes("|")) {
-    return null;
-  }
-
-  let body = trimmed;
-  const hasLeadingPipe = body.startsWith("|");
-  const hasTrailingPipe = body.endsWith("|");
-
-  if (hasLeadingPipe) {
-    body = body.slice(1);
-  }
-  if (hasTrailingPipe) {
-    body = body.slice(0, -1);
-  }
-
-  const parts = body.split("|");
-  const cells: RowLayoutCell[] = [];
-  let cursor = hasLeadingPipe ? 1 : 0;
-
-  parts.forEach((part) => {
-    const leadingSpaces = part.length - part.trimStart().length;
-    const content = part.trim();
-    const contentStart = cursor + leadingSpaces;
-    const start = cursor;
-    const end = cursor + part.length;
-
-    cells.push({
-      start,
-      end,
-      contentStart,
-      contentLength: content.length
-    });
-
-    cursor = end + 1;
-  });
-
-  return {
-    cells
-  };
-}
-
-function parseTable(lines: string[]): ParsedTable {
-  const rows = lines.map(splitRow);
-
-  return {
-    rows
-  };
-}
-
-function formatTableBlock(lines: string[], settings: TableFormatterSettings, prefix: string): string[] {
-  const parsed = parseTable(lines);
-  const columnCount = Math.max(...parsed.rows.map((row) => row.length));
-
-  const normalizedRows = parsed.rows.map((row) => {
-    const cloned = row.slice();
-    while (cloned.length < columnCount) {
-      cloned.push("");
-    }
-    return cloned;
-  });
-
-  const contentWidths = new Array<number>(columnCount).fill(0);
-  normalizedRows.forEach((row, rowIndex) => {
-    if (rowIndex === 1) {
-      return;
-    }
-    row.forEach((cell, colIndex) => {
-      contentWidths[colIndex] = Math.max(contentWidths[colIndex], cell.length);
-    });
-  });
-
-  const delimiterRow = new Array<string>(columnCount).fill("").map((_, colIndex) => {
-    const dashCount = settings.dashCount ?? Math.max(3, contentWidths[colIndex]);
-    return buildDelimiterCell(dashCount);
-  });
-
-  const formattedRows: string[] = [];
-  for (let rowIndex = 0; rowIndex < normalizedRows.length; rowIndex += 1) {
-    if (rowIndex === 1) {
-      formattedRows.push(formatRow(delimiterRow, settings.paddingSpaces, true));
-      continue;
-    }
-
-    const row = normalizedRows[rowIndex];
-    formattedRows.push(formatRow(row, settings.paddingSpaces, false));
-  }
-
-  if (!prefix) {
-    return formattedRows;
-  }
-
-  return formattedRows.map((row) => `${prefix}${row}`);
-}
-
-function buildDelimiterCell(dashCount: number): string {
-  const dashes = "-".repeat(Math.max(1, dashCount));
-  return dashes;
-}
-
-function formatRow(
-  row: string[],
-  paddingSpaces: number | null,
-  isDelimiter: boolean
-): string {
-  if (paddingSpaces === null) {
-    const minimal = row.map((cell) => ` ${cell.trim()} `);
-    return `|${minimal.join("|")}|`;
-  }
-
-  const padded = row.map((cell) => {
-    const left = " ".repeat(paddingSpaces);
-    const right = " ".repeat(paddingSpaces);
-
-    if (isDelimiter) {
-      const delimiter = cell;
-      return `${left}${delimiter}${right}`;
-    }
-
-    const value = cell.trim();
-    return `${left}${value}${right}`;
-  });
-
-  return `|${padded.join("|")}|`;
 }
