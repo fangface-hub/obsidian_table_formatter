@@ -1,5 +1,6 @@
 import {
   App,
+  EditorChange,
   EditorPosition,
   MarkdownView,
   Modal,
@@ -8,8 +9,7 @@ import {
   PluginSettingTab,
   Setting,
   TAbstractFile,
-  TFile,
-  livePreviewState
+  TFile
 } from "obsidian";
 import {
   DEFAULT_SETTINGS,
@@ -21,8 +21,11 @@ import {
 } from "./tableFormatter";
 
 export default class TableFormatterPlugin extends Plugin {
+  private static readonly MODIFY_FORMAT_DELAY_MS = 1500;
+
   settings: TableFormatterSettings = DEFAULT_SETTINGS;
   private processingFiles = new Set<string>();
+  private modifyFormatTimers = new Map<string, number>();
   private toggleRibbonEl: HTMLElement | null = null;
   private toggleStatusBarEl: HTMLElement | null = null;
 
@@ -76,35 +79,59 @@ export default class TableFormatterPlugin extends Plugin {
     });
 
     // In source mode, auto-format table edits when editing assist is enabled.
+    // The work is debounced so formatting runs between edit bursts instead of
+    // on every autosave while typing.
     this.registerEvent(this.app.vault.on("modify", (file) => {
       if (!(file instanceof TFile) || file.extension !== "md") {
         return;
       }
 
-      const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
-      if (!activeView || activeView.file?.path !== file.path) {
-        return;
-      }
-
-      if (activeView.getMode() !== "source") {
-        return;
-      }
-
-      if (!this.settings.editingAssistEnabled) {
-        return;
-      }
-
-      // Guard against forced focus behavior in Live Preview.
-      if (this.isLivePreviewView(activeView)) {
-        return;
-      }
-
-      void this.handleModify(file);
+      this.scheduleModifyFormat(file);
     }));
   }
 
   onunload(): void {
+    for (const timer of this.modifyFormatTimers.values()) {
+      window.clearTimeout(timer);
+    }
+    this.modifyFormatTimers.clear();
     this.processingFiles.clear();
+  }
+
+  private scheduleModifyFormat(file: TFile): void {
+    const pending = this.modifyFormatTimers.get(file.path);
+    if (pending !== undefined) {
+      window.clearTimeout(pending);
+    }
+
+    const timer = window.setTimeout(() => {
+      this.modifyFormatTimers.delete(file.path);
+      void this.formatAfterModify(file);
+    }, TableFormatterPlugin.MODIFY_FORMAT_DELAY_MS);
+    this.modifyFormatTimers.set(file.path, timer);
+  }
+
+  // Guards run when the debounce fires, not when the modify event arrives,
+  // so a mode switch or toggle change during the delay is respected.
+  private async formatAfterModify(file: TFile): Promise<void> {
+    if (!this.settings.editingAssistEnabled) {
+      return;
+    }
+
+    const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+    if (!activeView || activeView.file?.path !== file.path) {
+      return;
+    }
+
+    if (activeView.getMode() !== "source") {
+      return;
+    }
+
+    if (this.isLivePreviewView(activeView)) {
+      return;
+    }
+
+    await this.handleModify(file);
   }
 
   private async handleModify(file: TAbstractFile): Promise<void> {
@@ -172,21 +199,24 @@ export default class TableFormatterPlugin extends Plugin {
       return false;
     }
 
-    const activeEditingView = this.getActiveEditingView(file);
-    const editorState = activeEditingView ? this.captureEditorState(activeEditingView) : null;
-    const content = await this.app.vault.cachedRead(file);
-    const formatted = formatMarkdownTables(content, this.settings);
-
-    if (formatted === content) {
-      return false;
-    }
-
     try {
       this.processingFiles.add(file.path);
-      await this.app.vault.process(file, () => formatted);
-      if (activeEditingView && editorState) {
-        await this.restoreEditorState(activeEditingView, editorState, content, formatted);
+
+      // Prefer editing the open buffer: Obsidian then sees a normal edit
+      // instead of an external disk change, so there is no "modified
+      // externally" popup and the metadata cache stays valid.
+      const activeEditingView = this.getActiveEditingView(file);
+      if (activeEditingView) {
+        return this.formatThroughEditor(activeEditingView);
       }
+
+      const content = await this.app.vault.cachedRead(file);
+      const formatted = formatMarkdownTables(content, this.settings);
+      if (formatted === content) {
+        return false;
+      }
+
+      await this.app.vault.process(file, () => formatted);
     } catch (error) {
       console.error("table-formatter-on-save: failed to format table", error);
       new Notice("Table formatting failed. Check console for details.");
@@ -194,6 +224,52 @@ export default class TableFormatterPlugin extends Plugin {
     } finally {
       this.processingFiles.delete(file.path);
     }
+
+    return true;
+  }
+
+  private formatThroughEditor(view: MarkdownView): boolean {
+    const editor = view.editor;
+    const content = editor.getValue();
+    const formatted = formatMarkdownTables(content, this.settings);
+
+    if (formatted === content) {
+      return false;
+    }
+
+    const selections = editor.listSelections().map((selection) => ({
+      anchor: selection.anchor,
+      head: selection.head
+    }));
+    const scroll = editor.getScrollInfo();
+
+    const sourceLines = content.split("\n");
+    const formattedLines = formatted.split("\n");
+
+    if (sourceLines.length === formattedLines.length) {
+      // formatMarkdownTables emits one output line per input line, so the
+      // reformat can be applied as per-line changes. Untouched lines keep
+      // their positions, which keeps the visible jump to a minimum.
+      const changes: EditorChange[] = [];
+      for (let line = 0; line < sourceLines.length; line += 1) {
+        if (sourceLines[line] !== formattedLines[line]) {
+          changes.push({
+            from: { line, ch: 0 },
+            to: { line, ch: sourceLines[line].length },
+            text: formattedLines[line]
+          });
+        }
+      }
+      editor.transaction({ changes });
+    } else {
+      editor.setValue(formatted);
+    }
+
+    editor.setSelections(selections.map((selection) => ({
+      anchor: this.mapEditorPosition(content, formatted, selection.anchor),
+      head: this.mapEditorPosition(content, formatted, selection.head)
+    })), 0);
+    editor.scrollTo(scroll.left, scroll.top);
 
     return true;
   }
@@ -207,93 +283,23 @@ export default class TableFormatterPlugin extends Plugin {
     return activeView;
   }
 
+  // getMode() reports "source" for both raw Source mode and Live Preview,
+  // so the two must be told apart here. getState().source is true only in
+  // raw Source mode. When no clear signal is available, the view is treated
+  // as Live Preview so auto-formatting stays off instead of fighting the
+  // renderer.
   private isLivePreviewView(view: MarkdownView): boolean {
-    const editorWithCodeMirror = view.editor as unknown as {
-      cm?: {
-        state?: {
-          field?: (plugin: unknown, require?: boolean) => unknown;
-        };
-      };
-    };
-
-    const readStateField = editorWithCodeMirror.cm?.state?.field;
-    if (typeof readStateField !== "function") {
-      return false;
+    const state = view.getState() as { source?: unknown };
+    if (typeof state.source === "boolean") {
+      return !state.source;
     }
 
-    try {
-      return readStateField(livePreviewState, false) !== undefined;
-    } catch {
-      return false;
-    }
-  }
-
-  private captureEditorState(view: MarkdownView) {
-    const editor = view.editor;
-    return {
-      selections: editor.listSelections().map((selection) => ({
-        anchor: selection.anchor,
-        head: selection.head
-      })),
-      scroll: editor.getScrollInfo()
-    };
-  }
-
-  private async restoreEditorState(
-    view: MarkdownView,
-    state: ReturnType<TableFormatterPlugin["captureEditorState"]>,
-    sourceContent: string,
-    formattedContent: string
-  ): Promise<void> {
-    await this.waitForEditorFlush();
-
-    if (view.file?.path === undefined || view.getMode() !== "source") {
-      return;
+    const sourceView = view.contentEl.querySelector(".markdown-source-view");
+    if (sourceView) {
+      return sourceView.classList.contains("is-live-preview");
     }
 
-    if (!this.settings.editingAssistEnabled || this.isLivePreviewView(view)) {
-      return;
-    }
-
-    const editor = view.editor;
-    const mappedSelections = state.selections.map((selection) => ({
-      anchor: this.mapEditorPosition(sourceContent, formattedContent, selection.anchor),
-      head: this.mapEditorPosition(sourceContent, formattedContent, selection.head)
-    }));
-    const currentSelections = editor.listSelections().map((selection) => ({
-      anchor: selection.anchor,
-      head: selection.head
-    }));
-
-    if (this.selectionsMatch(currentSelections, mappedSelections)) {
-      return;
-    }
-
-    editor.focus();
-    editor.setSelections(mappedSelections, 0);
-    editor.scrollTo(state.scroll.left, state.scroll.top);
-  }
-
-  private async waitForEditorFlush(): Promise<void> {
-    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
-    await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
-  }
-
-  private selectionsMatch(
-    left: Array<{ anchor: EditorPosition; head: EditorPosition }>,
-    right: Array<{ anchor: EditorPosition; head: EditorPosition }>
-  ): boolean {
-    if (left.length !== right.length) {
-      return false;
-    }
-
-    return left.every((selection, index) => {
-      const target = right[index];
-      return selection.anchor.line === target.anchor.line
-        && selection.anchor.ch === target.anchor.ch
-        && selection.head.line === target.head.line
-        && selection.head.ch === target.head.ch;
-    });
+    return true;
   }
 
   private mapEditorPosition(sourceContent: string, formattedContent: string, position: EditorPosition): EditorPosition {
