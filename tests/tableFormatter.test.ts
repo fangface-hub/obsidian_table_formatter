@@ -48,6 +48,28 @@ test("extra columns added during formatting default to no alignment", () => {
   assert.equal(format(input), expected);
 });
 
+test("formatting never changes the number of lines", () => {
+  const input = [
+    "# Heading",
+    "",
+    "| A | B |",
+    "|-|-------|",
+    "| a | b |",
+    "",
+    "```",
+    "| not | a | table |",
+    "```",
+    "",
+    "> | Q | R |",
+    "> | - | - |",
+    "> | q | r |",
+    "",
+    "plain text"
+  ].join("\n");
+  const output = format(input);
+  assert.equal(output.split("\n").length, input.split("\n").length);
+});
+
 test("dash count sets the number of hyphens and colons are added on top", () => {
   const settings: TableFormatterSettings = { paddingSpaces: null, dashCount: 5 };
   const input = ["| A | B | C |", "| :--- | ---: | :---: |", "| a | b | c |"].join("\n");

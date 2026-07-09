@@ -6,7 +6,8 @@ An Obsidian plugin for formatting Markdown tables on save.
 
 - Formats Markdown tables whenever a Markdown file is saved.
 - Runs auto-format only while editing in Source mode.
-- Applies focus/selection restoration only in Source mode.
+- Waits for a short pause in typing (1.5 seconds) before auto-formatting, so it does not interfere with ongoing edits.
+- Applies edits through the open editor, so the cursor stays in place and Obsidian does not report the file as externally modified.
 - Lets you format manually with the ribbon button (table icon) or the command palette.
 - Can format every Markdown file in the vault at once with the command "Format tables in all files", which is handy when you first add the plugin to an existing vault. It asks for confirmation first and reports how many files were changed.
 - Adds a ribbon toggle button (power icon) to force-enable/disable auto-format and focus control while editing.
