@@ -29,7 +29,8 @@ var import_obsidian = require("obsidian");
 var DEFAULT_SETTINGS = {
   paddingSpaces: null,
   dashCount: null,
-  editingAssistEnabled: true
+  editingAssistEnabled: true,
+  modifyFormatDelaySeconds: 3
 };
 function formatMarkdownTables(content, settings) {
   const lines = content.split(/\r?\n/);
@@ -236,6 +237,7 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
     super(...arguments);
     this.settings = DEFAULT_SETTINGS;
     this.processingFiles = /* @__PURE__ */ new Set();
+    this.modifyFormatTimers = /* @__PURE__ */ new Map();
     this.toggleRibbonEl = null;
     this.toggleStatusBarEl = null;
   }
@@ -283,30 +285,47 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
       if (!(file instanceof import_obsidian.TFile) || file.extension !== "md") {
         return;
       }
-      const activeView = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
-      if (!activeView || activeView.file?.path !== file.path) {
-        return;
-      }
-      if (activeView.getMode() !== "source") {
-        return;
-      }
-      if (!this.settings.editingAssistEnabled) {
-        return;
-      }
-      if (this.isLivePreviewView(activeView)) {
-        return;
-      }
-      void this.handleModify(file);
+      this.scheduleModifyFormat(file);
     }));
   }
   onunload() {
+    for (const timer of this.modifyFormatTimers.values()) {
+      window.clearTimeout(timer);
+    }
+    this.modifyFormatTimers.clear();
     this.processingFiles.clear();
+  }
+  scheduleModifyFormat(file) {
+    const pending = this.modifyFormatTimers.get(file.path);
+    if (pending !== void 0) {
+      window.clearTimeout(pending);
+    }
+    const timer = window.setTimeout(() => {
+      this.modifyFormatTimers.delete(file.path);
+      void this.formatAfterModify(file);
+    }, this.settings.modifyFormatDelaySeconds * 1e3);
+    this.modifyFormatTimers.set(file.path, timer);
+  }
+  // Guards run when the debounce fires, not when the modify event arrives,
+  // so a mode switch or toggle change during the delay is respected.
+  async formatAfterModify(file) {
+    if (!this.settings.editingAssistEnabled) {
+      return;
+    }
+    const activeView = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
+    if (!activeView || activeView.file?.path !== file.path) {
+      return;
+    }
+    if (activeView.getMode() !== "source") {
+      return;
+    }
+    await this.handleModify(file);
   }
   async handleModify(file) {
     if (!(file instanceof import_obsidian.TFile) || file.extension !== "md") {
       return;
     }
-    await this.formatFile(file);
+    await this.formatFile(file, true);
   }
   async formatActiveFile() {
     const activeFile = this.app.workspace.getActiveFile();
@@ -352,23 +371,22 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
     const base = `Formatted tables in ${changed} of ${files.length} files.`;
     new import_obsidian.Notice(failed > 0 ? `${base} ${failed} could not be processed.` : base);
   }
-  async formatFile(file) {
+  async formatFile(file, protectSelections = false) {
     if (this.processingFiles.has(file.path)) {
-      return false;
-    }
-    const activeEditingView = this.getActiveEditingView(file);
-    const editorState = activeEditingView ? this.captureEditorState(activeEditingView) : null;
-    const content = await this.app.vault.cachedRead(file);
-    const formatted = formatMarkdownTables(content, this.settings);
-    if (formatted === content) {
       return false;
     }
     try {
       this.processingFiles.add(file.path);
-      await this.app.vault.process(file, () => formatted);
-      if (activeEditingView && editorState) {
-        await this.restoreEditorState(activeEditingView, editorState, content, formatted);
+      const activeEditingView = this.getActiveEditingView(file);
+      if (activeEditingView) {
+        return this.formatThroughEditor(activeEditingView, protectSelections);
       }
+      const content = await this.app.vault.cachedRead(file);
+      const formatted = formatMarkdownTables(content, this.settings);
+      if (formatted === content) {
+        return false;
+      }
+      await this.app.vault.process(file, () => formatted);
     } catch (error) {
       console.error("table-formatter-on-save: failed to format table", error);
       new import_obsidian.Notice("Table formatting failed. Check console for details.");
@@ -378,71 +396,90 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
     }
     return true;
   }
+  formatThroughEditor(view, protectSelections) {
+    const editor = view.editor;
+    const content = editor.getValue();
+    const formatted = formatMarkdownTables(content, this.settings);
+    if (formatted === content) {
+      return false;
+    }
+    const sourceLines = content.split("\n");
+    const formattedLines = formatted.split("\n");
+    if (sourceLines.length !== formattedLines.length) {
+      editor.setValue(formatted);
+      return true;
+    }
+    const selections = editor.listSelections().map((selection) => ({
+      anchor: selection.anchor,
+      head: selection.head
+    }));
+    const scroll = editor.getScrollInfo();
+    const protectedLines = protectSelections ? this.tableLinesTouchedBySelections(selections, sourceLines) : /* @__PURE__ */ new Set();
+    const changes = [];
+    let deferred = false;
+    for (let line = 0; line < sourceLines.length; line += 1) {
+      if (sourceLines[line] === formattedLines[line]) {
+        continue;
+      }
+      if (protectedLines.has(line)) {
+        deferred = true;
+        continue;
+      }
+      changes.push({
+        from: { line, ch: 0 },
+        to: { line, ch: sourceLines[line].length },
+        text: formattedLines[line]
+      });
+    }
+    if (changes.length > 0) {
+      editor.transaction({ changes });
+      if (protectSelections) {
+        editor.scrollTo(scroll.left, scroll.top);
+      } else {
+        editor.setSelections(selections.map((selection) => ({
+          anchor: this.mapEditorPosition(content, formatted, selection.anchor),
+          head: this.mapEditorPosition(content, formatted, selection.head)
+        })), 0);
+        editor.scrollTo(scroll.left, scroll.top);
+      }
+    }
+    if (deferred && view.file) {
+      this.scheduleModifyFormat(view.file);
+    }
+    return changes.length > 0;
+  }
+  // Returns the indexes of all lines belonging to a table block that a
+  // selection touches. Blocks are found by expanding from the selection
+  // over contiguous table-looking lines.
+  tableLinesTouchedBySelections(selections, sourceLines) {
+    const protectedLines = /* @__PURE__ */ new Set();
+    for (const selection of selections) {
+      const first = Math.min(selection.anchor.line, selection.head.line);
+      const last = Math.max(selection.anchor.line, selection.head.line);
+      let start = first;
+      if (looksLikeTableRow(sourceLines[start] ?? "")) {
+        while (start > 0 && looksLikeTableRow(sourceLines[start - 1])) {
+          start -= 1;
+        }
+      }
+      let end = last;
+      if (looksLikeTableRow(sourceLines[end] ?? "")) {
+        while (end + 1 < sourceLines.length && looksLikeTableRow(sourceLines[end + 1])) {
+          end += 1;
+        }
+      }
+      for (let line = start; line <= end; line += 1) {
+        protectedLines.add(line);
+      }
+    }
+    return protectedLines;
+  }
   getActiveEditingView(file) {
     const activeView = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
     if (!activeView || activeView.file?.path !== file.path || activeView.getMode() !== "source") {
       return null;
     }
     return activeView;
-  }
-  isLivePreviewView(view) {
-    const editorWithCodeMirror = view.editor;
-    const readStateField = editorWithCodeMirror.cm?.state?.field;
-    if (typeof readStateField !== "function") {
-      return false;
-    }
-    try {
-      return readStateField(import_obsidian.livePreviewState, false) !== void 0;
-    } catch {
-      return false;
-    }
-  }
-  captureEditorState(view) {
-    const editor = view.editor;
-    return {
-      selections: editor.listSelections().map((selection) => ({
-        anchor: selection.anchor,
-        head: selection.head
-      })),
-      scroll: editor.getScrollInfo()
-    };
-  }
-  async restoreEditorState(view, state, sourceContent, formattedContent) {
-    await this.waitForEditorFlush();
-    if (view.file?.path === void 0 || view.getMode() !== "source") {
-      return;
-    }
-    if (!this.settings.editingAssistEnabled || this.isLivePreviewView(view)) {
-      return;
-    }
-    const editor = view.editor;
-    const mappedSelections = state.selections.map((selection) => ({
-      anchor: this.mapEditorPosition(sourceContent, formattedContent, selection.anchor),
-      head: this.mapEditorPosition(sourceContent, formattedContent, selection.head)
-    }));
-    const currentSelections = editor.listSelections().map((selection) => ({
-      anchor: selection.anchor,
-      head: selection.head
-    }));
-    if (this.selectionsMatch(currentSelections, mappedSelections)) {
-      return;
-    }
-    editor.focus();
-    editor.setSelections(mappedSelections, 0);
-    editor.scrollTo(state.scroll.left, state.scroll.top);
-  }
-  async waitForEditorFlush() {
-    await new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
-    await new Promise((resolve) => window.requestAnimationFrame(() => resolve()));
-  }
-  selectionsMatch(left, right) {
-    if (left.length !== right.length) {
-      return false;
-    }
-    return left.every((selection, index) => {
-      const target = right[index];
-      return selection.anchor.line === target.anchor.line && selection.anchor.ch === target.anchor.ch && selection.head.line === target.head.line && selection.head.ch === target.head.ch;
-    });
   }
   mapEditorPosition(sourceContent, formattedContent, position) {
     const sourceLines = sourceContent.split(/\r?\n/);
@@ -516,12 +553,14 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
     const paddingSpaces = Number.isInteger(loaded.paddingSpaces) && loaded.paddingSpaces >= 0 ? loaded.paddingSpaces : null;
     const dashCount = Number.isInteger(loaded.dashCount) && loaded.dashCount >= 1 ? loaded.dashCount : null;
     const editingAssistEnabled = typeof loaded.editingAssistEnabled === "boolean" ? loaded.editingAssistEnabled : DEFAULT_SETTINGS.editingAssistEnabled;
+    const modifyFormatDelaySeconds = Number.isInteger(loaded.modifyFormatDelaySeconds) && loaded.modifyFormatDelaySeconds >= 1 ? loaded.modifyFormatDelaySeconds : DEFAULT_SETTINGS.modifyFormatDelaySeconds;
     this.settings = {
       ...DEFAULT_SETTINGS,
       ...loaded,
       paddingSpaces,
       dashCount,
-      editingAssistEnabled
+      editingAssistEnabled,
+      modifyFormatDelaySeconds
     };
   }
   async saveSettings() {
@@ -591,7 +630,25 @@ var TableFormatterSettingTab = class extends import_obsidian.PluginSettingTab {
           await this.plugin.saveSettings();
         });
       });
-      new import_obsidian.Setting(containerEl).setName("Enable auto-format and focus control while editing").setDesc("Controls modify-triggered table formatting and focus/selection restoration in Source mode.").addToggle((toggle) => {
+      new import_obsidian.Setting(containerEl).setName("Auto-format delay").setDesc("Seconds to wait after the last change before tables are auto-formatted. Longer values interfere less while typing.").addText((text) => {
+        text.setPlaceholder(String(DEFAULT_SETTINGS.modifyFormatDelaySeconds)).setValue(String(this.plugin.settings.modifyFormatDelaySeconds)).onChange(async (value) => {
+          const trimmed = value.trim();
+          if (trimmed === "") {
+            this.plugin.settings.modifyFormatDelaySeconds = DEFAULT_SETTINGS.modifyFormatDelaySeconds;
+            await this.plugin.saveSettings();
+            return;
+          }
+          const parsed = Number(trimmed);
+          if (!Number.isInteger(parsed) || parsed < 1) {
+            new import_obsidian.Notice("Auto-format delay must be an integer >= 1 or blank.");
+            text.setValue(String(this.plugin.settings.modifyFormatDelaySeconds));
+            return;
+          }
+          this.plugin.settings.modifyFormatDelaySeconds = parsed;
+          await this.plugin.saveSettings();
+        });
+      });
+      new import_obsidian.Setting(containerEl).setName("Enable auto-format and focus control while editing").setDesc("Controls modify-triggered table formatting while editing in Live Preview or Source mode.").addToggle((toggle) => {
         toggle.setValue(this.plugin.settings.editingAssistEnabled).onChange(async (value) => {
           this.plugin.settings.editingAssistEnabled = value;
           await this.plugin.saveSettings();
