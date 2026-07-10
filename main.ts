@@ -139,7 +139,7 @@ export default class TableFormatterPlugin extends Plugin {
       return;
     }
 
-    await this.formatFile(file);
+    await this.formatFile(file, true);
   }
 
   private async formatActiveFile(): Promise<void> {
@@ -194,7 +194,7 @@ export default class TableFormatterPlugin extends Plugin {
     new Notice(failed > 0 ? `${base} ${failed} could not be processed.` : base);
   }
 
-  private async formatFile(file: TFile): Promise<boolean> {
+  private async formatFile(file: TFile, protectSelections = false): Promise<boolean> {
     if (this.processingFiles.has(file.path)) {
       return false;
     }
@@ -207,7 +207,7 @@ export default class TableFormatterPlugin extends Plugin {
       // externally" popup and the metadata cache stays valid.
       const activeEditingView = this.getActiveEditingView(file);
       if (activeEditingView) {
-        return this.formatThroughEditor(activeEditingView);
+        return this.formatThroughEditor(activeEditingView, protectSelections);
       }
 
       const content = await this.app.vault.cachedRead(file);
@@ -228,7 +228,7 @@ export default class TableFormatterPlugin extends Plugin {
     return true;
   }
 
-  private formatThroughEditor(view: MarkdownView): boolean {
+  private formatThroughEditor(view: MarkdownView, protectSelections: boolean): boolean {
     const editor = view.editor;
     const content = editor.getValue();
     const formatted = formatMarkdownTables(content, this.settings);
@@ -237,41 +237,107 @@ export default class TableFormatterPlugin extends Plugin {
       return false;
     }
 
+    const sourceLines = content.split("\n");
+    const formattedLines = formatted.split("\n");
+
+    if (sourceLines.length !== formattedLines.length) {
+      // Not expected: formatMarkdownTables emits one output line per input
+      // line (pinned by a test). Replace the whole buffer as a safety net.
+      editor.setValue(formatted);
+      return true;
+    }
+
     const selections = editor.listSelections().map((selection) => ({
       anchor: selection.anchor,
       head: selection.head
     }));
     const scroll = editor.getScrollInfo();
 
-    const sourceLines = content.split("\n");
-    const formattedLines = formatted.split("\n");
+    // For modify-triggered runs, tables the cursor or a selection sits in
+    // are left alone. Rewriting them makes Live Preview rebuild the table
+    // widget, which throws the user out of cell editing and drags the view
+    // to the table. Deferred lines are retried once the cursor has moved on.
+    const protectedLines = protectSelections
+      ? this.tableLinesTouchedBySelections(selections, sourceLines)
+      : new Set<number>();
 
-    if (sourceLines.length === formattedLines.length) {
-      // formatMarkdownTables emits one output line per input line, so the
-      // reformat can be applied as per-line changes. Untouched lines keep
-      // their positions, which keeps the visible jump to a minimum.
-      const changes: EditorChange[] = [];
-      for (let line = 0; line < sourceLines.length; line += 1) {
-        if (sourceLines[line] !== formattedLines[line]) {
-          changes.push({
-            from: { line, ch: 0 },
-            to: { line, ch: sourceLines[line].length },
-            text: formattedLines[line]
-          });
-        }
+    // Applying the reformat as per-line changes keeps untouched lines in
+    // place, so positions outside the changed lines are unaffected.
+    const changes: EditorChange[] = [];
+    let deferred = false;
+    for (let line = 0; line < sourceLines.length; line += 1) {
+      if (sourceLines[line] === formattedLines[line]) {
+        continue;
       }
-      editor.transaction({ changes });
-    } else {
-      editor.setValue(formatted);
+
+      if (protectedLines.has(line)) {
+        deferred = true;
+        continue;
+      }
+
+      changes.push({
+        from: { line, ch: 0 },
+        to: { line, ch: sourceLines[line].length },
+        text: formattedLines[line]
+      });
     }
 
-    editor.setSelections(selections.map((selection) => ({
-      anchor: this.mapEditorPosition(content, formatted, selection.anchor),
-      head: this.mapEditorPosition(content, formatted, selection.head)
-    })), 0);
-    editor.scrollTo(scroll.left, scroll.top);
+    if (changes.length > 0) {
+      editor.transaction({ changes });
+      if (protectSelections) {
+        // Protected lines were not rewritten and line positions are stable,
+        // so the selection is already correct; only the scroll position is
+        // pinned in case the edit pulled the view along.
+        editor.scrollTo(scroll.left, scroll.top);
+      } else {
+        editor.setSelections(selections.map((selection) => ({
+          anchor: this.mapEditorPosition(content, formatted, selection.anchor),
+          head: this.mapEditorPosition(content, formatted, selection.head)
+        })), 0);
+        editor.scrollTo(scroll.left, scroll.top);
+      }
+    }
 
-    return true;
+    if (deferred && view.file) {
+      this.scheduleModifyFormat(view.file);
+    }
+
+    return changes.length > 0;
+  }
+
+  // Returns the indexes of all lines belonging to a table block that a
+  // selection touches. Blocks are found by expanding from the selection
+  // over contiguous table-looking lines.
+  private tableLinesTouchedBySelections(
+    selections: Array<{ anchor: EditorPosition; head: EditorPosition }>,
+    sourceLines: string[]
+  ): Set<number> {
+    const protectedLines = new Set<number>();
+
+    for (const selection of selections) {
+      const first = Math.min(selection.anchor.line, selection.head.line);
+      const last = Math.max(selection.anchor.line, selection.head.line);
+
+      let start = first;
+      if (looksLikeTableRow(sourceLines[start] ?? "")) {
+        while (start > 0 && looksLikeTableRow(sourceLines[start - 1])) {
+          start -= 1;
+        }
+      }
+
+      let end = last;
+      if (looksLikeTableRow(sourceLines[end] ?? "")) {
+        while (end + 1 < sourceLines.length && looksLikeTableRow(sourceLines[end + 1])) {
+          end += 1;
+        }
+      }
+
+      for (let line = start; line <= end; line += 1) {
+        protectedLines.add(line);
+      }
+    }
+
+    return protectedLines;
   }
 
   private getActiveEditingView(file: TFile): MarkdownView | null {
