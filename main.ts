@@ -21,8 +21,6 @@ import {
 } from "./tableFormatter";
 
 export default class TableFormatterPlugin extends Plugin {
-  private static readonly MODIFY_FORMAT_DELAY_MS = 1500;
-
   settings: TableFormatterSettings = DEFAULT_SETTINGS;
   private processingFiles = new Set<string>();
   private modifyFormatTimers = new Map<string, number>();
@@ -78,9 +76,12 @@ export default class TableFormatterPlugin extends Plugin {
       }
     });
 
-    // In source mode, auto-format table edits when editing assist is enabled.
-    // The work is debounced so formatting runs between edit bursts instead of
-    // on every autosave while typing.
+    // While editing (Live Preview or Source mode), auto-format table edits
+    // when editing assist is enabled. The work is debounced so formatting
+    // runs between edit bursts instead of on every autosave while typing.
+    // Edits Obsidian itself makes to the file (such as re-padding a table
+    // edited through the Live Preview table widget) also fire this event,
+    // so the formatter always runs after them.
     this.registerEvent(this.app.vault.on("modify", (file) => {
       if (!(file instanceof TFile) || file.extension !== "md") {
         return;
@@ -107,7 +108,7 @@ export default class TableFormatterPlugin extends Plugin {
     const timer = window.setTimeout(() => {
       this.modifyFormatTimers.delete(file.path);
       void this.formatAfterModify(file);
-    }, TableFormatterPlugin.MODIFY_FORMAT_DELAY_MS);
+    }, this.settings.modifyFormatDelaySeconds * 1000);
     this.modifyFormatTimers.set(file.path, timer);
   }
 
@@ -123,11 +124,10 @@ export default class TableFormatterPlugin extends Plugin {
       return;
     }
 
+    // "source" covers Live Preview and raw Source mode; Reading view
+    // reports "preview" and is never auto-formatted. The formatter edits
+    // the open buffer, which is safe in both editing modes.
     if (activeView.getMode() !== "source") {
-      return;
-    }
-
-    if (this.isLivePreviewView(activeView)) {
       return;
     }
 
@@ -283,25 +283,6 @@ export default class TableFormatterPlugin extends Plugin {
     return activeView;
   }
 
-  // getMode() reports "source" for both raw Source mode and Live Preview,
-  // so the two must be told apart here. getState().source is true only in
-  // raw Source mode. When no clear signal is available, the view is treated
-  // as Live Preview so auto-formatting stays off instead of fighting the
-  // renderer.
-  private isLivePreviewView(view: MarkdownView): boolean {
-    const state = view.getState() as { source?: unknown };
-    if (typeof state.source === "boolean") {
-      return !state.source;
-    }
-
-    const sourceView = view.contentEl.querySelector(".markdown-source-view");
-    if (sourceView) {
-      return sourceView.classList.contains("is-live-preview");
-    }
-
-    return true;
-  }
-
   private mapEditorPosition(sourceContent: string, formattedContent: string, position: EditorPosition): EditorPosition {
     const sourceLines = sourceContent.split(/\r?\n/);
     const formattedLines = formattedContent.split(/\r?\n/);
@@ -399,12 +380,18 @@ export default class TableFormatterPlugin extends Plugin {
       ? loaded.editingAssistEnabled
       : DEFAULT_SETTINGS.editingAssistEnabled;
 
+    const modifyFormatDelaySeconds = Number.isInteger(loaded.modifyFormatDelaySeconds)
+      && (loaded.modifyFormatDelaySeconds as number) >= 1
+      ? (loaded.modifyFormatDelaySeconds as number)
+      : DEFAULT_SETTINGS.modifyFormatDelaySeconds;
+
     this.settings = {
       ...DEFAULT_SETTINGS,
       ...loaded,
       paddingSpaces,
       dashCount,
-      editingAssistEnabled
+      editingAssistEnabled,
+      modifyFormatDelaySeconds
     };
   }
 
@@ -507,8 +494,35 @@ class TableFormatterSettingTab extends PluginSettingTab {
         });
 
       new Setting(containerEl)
+        .setName("Auto-format delay")
+        .setDesc("Seconds to wait after the last change before tables are auto-formatted. Longer values interfere less while typing.")
+        .addText((text) => {
+          text
+            .setPlaceholder(String(DEFAULT_SETTINGS.modifyFormatDelaySeconds))
+            .setValue(String(this.plugin.settings.modifyFormatDelaySeconds))
+            .onChange(async (value) => {
+              const trimmed = value.trim();
+              if (trimmed === "") {
+                this.plugin.settings.modifyFormatDelaySeconds = DEFAULT_SETTINGS.modifyFormatDelaySeconds;
+                await this.plugin.saveSettings();
+                return;
+              }
+
+              const parsed = Number(trimmed);
+              if (!Number.isInteger(parsed) || parsed < 1) {
+                new Notice("Auto-format delay must be an integer >= 1 or blank.");
+                text.setValue(String(this.plugin.settings.modifyFormatDelaySeconds));
+                return;
+              }
+
+              this.plugin.settings.modifyFormatDelaySeconds = parsed;
+              await this.plugin.saveSettings();
+            });
+        });
+
+      new Setting(containerEl)
         .setName("Enable auto-format and focus control while editing")
-        .setDesc("Controls modify-triggered table formatting and focus/selection restoration in Source mode.")
+        .setDesc("Controls modify-triggered table formatting while editing in Live Preview or Source mode.")
         .addToggle((toggle) => {
           toggle
             .setValue(this.plugin.settings.editingAssistEnabled)

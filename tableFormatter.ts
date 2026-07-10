@@ -2,12 +2,14 @@ export interface TableFormatterSettings {
   paddingSpaces: number | null;
   dashCount: number | null;
   editingAssistEnabled: boolean;
+  modifyFormatDelaySeconds: number;
 }
 
 export const DEFAULT_SETTINGS: TableFormatterSettings = {
   paddingSpaces: null,
   dashCount: null,
-  editingAssistEnabled: true
+  editingAssistEnabled: true,
+  modifyFormatDelaySeconds: 3
 };
 
 export type ColumnAlignment = "none" | "left" | "right" | "center";
