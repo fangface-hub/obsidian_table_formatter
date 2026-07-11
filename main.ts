@@ -1,23 +1,23 @@
 import {
-  App,
-  EditorPosition,
-  MarkdownView,
-  Modal,
-  Notice,
-  Plugin,
-  PluginSettingTab,
-  Setting,
-  TAbstractFile,
-  TFile,
-  livePreviewState
+    App,
+    EditorPosition,
+    MarkdownView,
+    Modal,
+    Notice,
+    Plugin,
+    PluginSettingTab,
+    Setting,
+    TAbstractFile,
+    TFile,
+    livePreviewState
 } from "obsidian";
 import {
-  DEFAULT_SETTINGS,
-  TableFormatterSettings,
-  formatMarkdownTables,
-  getBlockquotePrefix,
-  looksLikeTableRow,
-  parseRowLayout
+    DEFAULT_SETTINGS,
+    TableFormatterSettings,
+    formatMarkdownTables,
+    getBlockquotePrefix,
+    looksLikeTableRow,
+    parseRowLayout
 } from "./tableFormatter";
 
 export default class TableFormatterPlugin extends Plugin {
@@ -94,8 +94,8 @@ export default class TableFormatterPlugin extends Plugin {
         return;
       }
 
-      // Guard against forced focus behavior in Live Preview.
-      if (this.isLivePreviewView(activeView)) {
+      // In Live Preview, behave exactly like editing assist is OFF for modify-triggered formatting.
+      if (this.shouldSkipModifyAutoFormat(activeView)) {
         return;
       }
 
@@ -208,6 +208,18 @@ export default class TableFormatterPlugin extends Plugin {
   }
 
   private isLivePreviewView(view: MarkdownView): boolean {
+    const containerEl = (view as unknown as { containerEl?: HTMLElement }).containerEl;
+    if (containerEl?.classList.contains("is-live-preview")) {
+      return true;
+    }
+
+    const currentModeName = (
+      view as unknown as { currentMode?: { constructor?: { name?: string } } }
+    ).currentMode?.constructor?.name?.toLowerCase();
+    if (currentModeName?.includes("livepreview")) {
+      return true;
+    }
+
     const editorWithCodeMirror = view.editor as unknown as {
       cm?: {
         state?: {
@@ -226,6 +238,65 @@ export default class TableFormatterPlugin extends Plugin {
     } catch {
       return false;
     }
+  }
+
+  private shouldSkipModifyAutoFormat(view: MarkdownView): boolean {
+    return this.isLivePreviewView(view);
+  }
+
+  private isCursorInsideTable(view: MarkdownView): boolean {
+    const lines = view.editor.getValue().split(/\r?\n/);
+    return view.editor.listSelections().some((selection) => this.isLineInsideTable(lines, selection.head.line));
+  }
+
+  private isLineInsideTable(lines: string[], line: number): boolean {
+    if (line < 0 || line >= lines.length || !looksLikeTableRow(lines[line])) {
+      return false;
+    }
+
+    let start = line;
+    while (start > 0 && looksLikeTableRow(lines[start - 1])) {
+      start -= 1;
+    }
+
+    let end = line;
+    while (end + 1 < lines.length && looksLikeTableRow(lines[end + 1])) {
+      end += 1;
+    }
+
+    if (end - start < 1) {
+      return false;
+    }
+
+    for (let index = start + 1; index <= end; index += 1) {
+      if (this.isDelimiterRow(lines[index])) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  private isDelimiterRow(line: string): boolean {
+    const trimmed = line.slice(getBlockquotePrefix(line).length).trim();
+    if (!trimmed.includes("|")) {
+      return false;
+    }
+
+    let text = trimmed;
+    if (text.startsWith("|")) {
+      text = text.slice(1);
+    }
+    if (text.endsWith("|")) {
+      text = text.slice(0, -1);
+    }
+
+    const cells = text.split("|");
+    if (cells.length === 0) {
+      return false;
+    }
+
+    return cells.every((cell) => /^:?-{1,}:?$/.test(cell.trim()));
   }
 
   private captureEditorState(view: MarkdownView) {
