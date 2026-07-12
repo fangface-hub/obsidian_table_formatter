@@ -1,24 +1,28 @@
 import {
-  App,
-  EditorChange,
-  EditorPosition,
-  MarkdownView,
-  Modal,
-  Notice,
-  Plugin,
-  PluginSettingTab,
-  Setting,
-  TAbstractFile,
-  TFile
+    App,
+    EditorChange,
+    EditorPosition,
+    MarkdownView,
+    Modal,
+    Notice,
+    Plugin,
+    PluginSettingTab,
+    Setting,
+    TAbstractFile,
+    TFile
 } from "obsidian";
 import {
-  DEFAULT_SETTINGS,
-  TableFormatterSettings,
-  formatMarkdownTables,
-  getBlockquotePrefix,
-  looksLikeTableRow,
-  parseRowLayout
+    DEFAULT_SETTINGS,
+    TableFormatterSettings,
+    formatMarkdownTables,
+    getBlockquotePrefix,
+    looksLikeTableRow,
+    parseRowLayout
 } from "./tableFormatter";
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
 
 export default class TableFormatterPlugin extends Plugin {
   settings: TableFormatterSettings = DEFAULT_SETTINGS;
@@ -430,7 +434,7 @@ export default class TableFormatterPlugin extends Plugin {
 
   async loadSettings(): Promise<void> {
     const data = await this.loadData();
-    const loaded = (data ?? {}) as Partial<TableFormatterSettings>;
+    const loaded = isRecord(data) ? data : {};
 
     const paddingSpaces = Number.isInteger(loaded.paddingSpaces)
       && (loaded.paddingSpaces as number) >= 0

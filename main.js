@@ -232,6 +232,9 @@ function formatRow(row, paddingSpaces, isDelimiter) {
 }
 
 // main.ts
+function isRecord(value) {
+  return typeof value === "object" && value !== null;
+}
 var TableFormatterPlugin = class extends import_obsidian.Plugin {
   constructor() {
     super(...arguments);
@@ -549,7 +552,7 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
   }
   async loadSettings() {
     const data = await this.loadData();
-    const loaded = data ?? {};
+    const loaded = isRecord(data) ? data : {};
     const paddingSpaces = Number.isInteger(loaded.paddingSpaces) && loaded.paddingSpaces >= 0 ? loaded.paddingSpaces : null;
     const dashCount = Number.isInteger(loaded.dashCount) && loaded.dashCount >= 1 ? loaded.dashCount : null;
     const editingAssistEnabled = typeof loaded.editingAssistEnabled === "boolean" ? loaded.editingAssistEnabled : DEFAULT_SETTINGS.editingAssistEnabled;
