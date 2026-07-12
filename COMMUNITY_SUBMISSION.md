@@ -15,7 +15,7 @@
 5. Create a GitHub Release with tag exactly equal to `manifest.json` version.
 6. Ensure release assets contain at least `main.js` and `manifest.json`.
 7. Include `styles.css` if used.
-8. Include `versions.json` for compatibility mapping.
+8. Keep `versions.json` in the repository root for compatibility mapping, but do not attach it as a release asset.
 
 ## Submit
 

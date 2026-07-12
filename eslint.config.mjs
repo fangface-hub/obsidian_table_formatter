@@ -1,3 +1,4 @@
+import tseslint from "@typescript-eslint/eslint-plugin";
 import tsparser from "@typescript-eslint/parser";
 import { defineConfig } from "eslint/config";
 
@@ -13,6 +14,11 @@ export default defineConfig([
         navigator: "readonly"
       }
     },
-    rules: {}
+    plugins: {
+      "@typescript-eslint": tseslint
+    },
+    rules: {
+      "@typescript-eslint/no-unsafe-assignment": "error"
+    }
   }
 ]);
