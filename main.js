@@ -293,7 +293,7 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
       if (!this.settings.editingAssistEnabled) {
         return;
       }
-      if (this.shouldSkipModifyAutoFormat(activeView)) {
+      if (this.isLivePreviewView(activeView)) {
         return;
       }
       void this.handleModify(file);
@@ -386,14 +386,6 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
     return activeView;
   }
   isLivePreviewView(view) {
-    const containerEl = view.containerEl;
-    if (containerEl?.classList.contains("is-live-preview")) {
-      return true;
-    }
-    const currentModeName = view.currentMode?.constructor?.name?.toLowerCase();
-    if (currentModeName?.includes("livepreview")) {
-      return true;
-    }
     const editorWithCodeMirror = view.editor;
     const readStateField = editorWithCodeMirror.cm?.state?.field;
     if (typeof readStateField !== "function") {
@@ -404,53 +396,6 @@ var TableFormatterPlugin = class extends import_obsidian.Plugin {
     } catch {
       return false;
     }
-  }
-  shouldSkipModifyAutoFormat(view) {
-    return this.isLivePreviewView(view);
-  }
-  isCursorInsideTable(view) {
-    const lines = view.editor.getValue().split(/\r?\n/);
-    return view.editor.listSelections().some((selection) => this.isLineInsideTable(lines, selection.head.line));
-  }
-  isLineInsideTable(lines, line) {
-    if (line < 0 || line >= lines.length || !looksLikeTableRow(lines[line])) {
-      return false;
-    }
-    let start = line;
-    while (start > 0 && looksLikeTableRow(lines[start - 1])) {
-      start -= 1;
-    }
-    let end = line;
-    while (end + 1 < lines.length && looksLikeTableRow(lines[end + 1])) {
-      end += 1;
-    }
-    if (end - start < 1) {
-      return false;
-    }
-    for (let index = start + 1; index <= end; index += 1) {
-      if (this.isDelimiterRow(lines[index])) {
-        return true;
-      }
-    }
-    return false;
-  }
-  isDelimiterRow(line) {
-    const trimmed = line.slice(getBlockquotePrefix(line).length).trim();
-    if (!trimmed.includes("|")) {
-      return false;
-    }
-    let text = trimmed;
-    if (text.startsWith("|")) {
-      text = text.slice(1);
-    }
-    if (text.endsWith("|")) {
-      text = text.slice(0, -1);
-    }
-    const cells = text.split("|");
-    if (cells.length === 0) {
-      return false;
-    }
-    return cells.every((cell) => /^:?-{1,}:?$/.test(cell.trim()));
   }
   captureEditorState(view) {
     const editor = view.editor;
