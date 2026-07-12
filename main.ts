@@ -433,7 +433,7 @@ export default class TableFormatterPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    const data = await this.loadData();
+    const data = (await this.loadData()) as unknown;
     const loaded = isRecord(data) ? data : {};
 
     const paddingSpaces = Number.isInteger(loaded.paddingSpaces)

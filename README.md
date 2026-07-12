@@ -87,10 +87,11 @@ Each script updates `package.json`, `package-lock.json`, `manifest.json`, and `v
 
 1. Commit and push to GitHub.
 1. Create a GitHub Release with tag exactly matching `manifest.json` version.
-1. Attach release assets: `main.js`, `manifest.json`, `styles.css` (optional), `versions.json` (recommended).
+1. Attach release assets: `main.js`, `manifest.json`, `styles.css` (optional).
 1. Submit the repository URL from [Obsidian Community Plugins](https://community.obsidian.md/plugins/new).
 
 Notes:
 
 - `manifest.json` in the default branch must be up to date before submission.
+- `versions.json` should stay in the repository root for Community Plugin compatibility mapping, but it does not need to be attached to the GitHub Release.
 - Plugin `id` must be unique and must not contain `obsidian`.
