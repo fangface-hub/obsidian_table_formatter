@@ -90,6 +90,33 @@ function isDelimiterRow(line) {
   }
   return cells.every((cell) => /^:?-{1,}:?$/.test(cell.trim()));
 }
+function isEscapedPipe(text, index) {
+  let backslashCount = 0;
+  for (let i = index - 1; i >= 0 && text[i] === "\\"; i -= 1) {
+    backslashCount += 1;
+  }
+  return backslashCount % 2 === 1;
+}
+function splitRowIntoParts(text) {
+  const parts = [];
+  let start = 0;
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] === "|" && !isEscapedPipe(text, i)) {
+      parts.push({
+        text: text.slice(start, i),
+        start,
+        end: i
+      });
+      start = i + 1;
+    }
+  }
+  parts.push({
+    text: text.slice(start),
+    start,
+    end: text.length
+  });
+  return parts;
+}
 function splitRow(line) {
   const trimmed = stripBlockquotePrefix(line).trim();
   let text = trimmed;
@@ -99,7 +126,7 @@ function splitRow(line) {
   if (text.endsWith("|")) {
     text = text.slice(0, -1);
   }
-  return text.split("|").map((cell) => cell.trim());
+  return splitRowIntoParts(text).map((cell) => cell.text.trim());
 }
 function getBlockquotePrefix(line) {
   const match = line.match(/^\s*(?:>\s*)+/);
@@ -126,22 +153,20 @@ function parseRowLayout(line) {
   if (hasTrailingPipe) {
     body = body.slice(0, -1);
   }
-  const parts = body.split("|");
+  const parts = splitRowIntoParts(body);
   const cells = [];
-  let cursor = hasLeadingPipe ? 1 : 0;
   parts.forEach((part) => {
-    const leadingSpaces = part.length - part.trimStart().length;
-    const content = part.trim();
-    const contentStart = cursor + leadingSpaces;
-    const start = cursor;
-    const end = cursor + part.length;
+    const leadingSpaces = part.text.length - part.text.trimStart().length;
+    const content = part.text.trim();
+    const contentStart = part.start + leadingSpaces;
+    const start = part.start;
+    const end = part.end;
     cells.push({
       start,
       end,
       contentStart,
       contentLength: content.length
     });
-    cursor = end + 1;
   });
   return {
     cells

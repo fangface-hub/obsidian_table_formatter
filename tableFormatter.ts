@@ -101,6 +101,45 @@ function isDelimiterRow(line: string): boolean {
   return cells.every((cell) => /^:?-{1,}:?$/.test(cell.trim()));
 }
 
+type CellPart = {
+  text: string;
+  start: number;
+  end: number;
+};
+
+function isEscapedPipe(text: string, index: number): boolean {
+  let backslashCount = 0;
+  for (let i = index - 1; i >= 0 && text[i] === "\\"; i -= 1) {
+    backslashCount += 1;
+  }
+
+  return backslashCount % 2 === 1;
+}
+
+function splitRowIntoParts(text: string): CellPart[] {
+  const parts: CellPart[] = [];
+  let start = 0;
+
+  for (let i = 0; i < text.length; i += 1) {
+    if (text[i] === "|" && !isEscapedPipe(text, i)) {
+      parts.push({
+        text: text.slice(start, i),
+        start,
+        end: i
+      });
+      start = i + 1;
+    }
+  }
+
+  parts.push({
+    text: text.slice(start),
+    start,
+    end: text.length
+  });
+
+  return parts;
+}
+
 function splitRow(line: string): string[] {
   const trimmed = stripBlockquotePrefix(line).trim();
   let text = trimmed;
@@ -112,7 +151,7 @@ function splitRow(line: string): string[] {
     text = text.slice(0, -1);
   }
 
-  return text.split("|").map((cell) => cell.trim());
+  return splitRowIntoParts(text).map((cell) => cell.text.trim());
 }
 
 export function getBlockquotePrefix(line: string): string {
@@ -146,16 +185,15 @@ export function parseRowLayout(line: string): RowLayout | null {
     body = body.slice(0, -1);
   }
 
-  const parts = body.split("|");
+  const parts = splitRowIntoParts(body);
   const cells: RowLayoutCell[] = [];
-  let cursor = hasLeadingPipe ? 1 : 0;
 
   parts.forEach((part) => {
-    const leadingSpaces = part.length - part.trimStart().length;
-    const content = part.trim();
-    const contentStart = cursor + leadingSpaces;
-    const start = cursor;
-    const end = cursor + part.length;
+    const leadingSpaces = part.text.length - part.text.trimStart().length;
+    const content = part.text.trim();
+    const contentStart = part.start + leadingSpaces;
+    const start = part.start;
+    const end = part.end;
 
     cells.push({
       start,
@@ -163,8 +201,6 @@ export function parseRowLayout(line: string): RowLayout | null {
       contentStart,
       contentLength: content.length
     });
-
-    cursor = end + 1;
   });
 
   return {

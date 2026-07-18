@@ -76,3 +76,17 @@ test("dash count sets the number of hyphens and colons are added on top", () => 
   const expected = ["| A | B | C |", "| :----- | -----: | :-----: |", "| a | b | c |"].join("\n");
   assert.equal(format(input, settings), expected);
 });
+
+test("escaped pipes inside wiki links and embeds are not treated as column separators", () => {
+  const input = [
+    "First column | Second column",
+    "-- | --",
+    "[[Basic formatting syntax\\|Markdown syntax]] | ![[Engelbart.jpg\\|200]]"
+  ].join("\n");
+  const expected = [
+    "| First column | Second column |",
+    "| -------------------------------------------- | ----------------------- |",
+    "| [[Basic formatting syntax\\|Markdown syntax]] | ![[Engelbart.jpg\\|200]] |"
+  ].join("\n");
+  assert.equal(format(input), expected);
+});
