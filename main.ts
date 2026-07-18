@@ -8,6 +8,7 @@ import {
     Plugin,
     PluginSettingTab,
     Setting,
+    SettingDefinitionItem,
     TAbstractFile,
     TFile
 } from "obsidian";
@@ -502,6 +503,154 @@ class TableFormatterSettingTab extends PluginSettingTab {
   constructor(app: App, plugin: TableFormatterPlugin) {
     super(app, plugin);
     this.plugin = plugin;
+  }
+
+  getSettingDefinitions(): SettingDefinitionItem[] {
+    return [
+      {
+        name: "Padding spaces",
+        desc: "Set the number of spaces around each cell. Leave blank for auto (single space).",
+        control: {
+          type: "text",
+          key: "paddingSpaces",
+          placeholder: "blank or 0+",
+          defaultValue: "",
+          validate: (value) => {
+            const trimmed = value.trim();
+            if (trimmed === "") {
+              return;
+            }
+
+            const parsed = Number(trimmed);
+            if (!Number.isInteger(parsed) || parsed < 0) {
+              return "Padding spaces must be an integer >= 0 or blank.";
+            }
+          }
+        }
+      },
+      {
+        name: "Table border dash count",
+        desc: "Number of hyphens for each delimiter cell in the table separator row. Leave blank for auto.",
+        control: {
+          type: "text",
+          key: "dashCount",
+          placeholder: "blank or 1+",
+          defaultValue: "",
+          validate: (value) => {
+            const trimmed = value.trim();
+            if (trimmed === "") {
+              return;
+            }
+
+            const parsed = Number(trimmed);
+            if (!Number.isInteger(parsed) || parsed < 1) {
+              return "Dash count must be an integer >= 1 or blank.";
+            }
+          }
+        }
+      },
+      {
+        name: "Auto-format delay",
+        desc: "Seconds to wait after the last change before tables are auto-formatted. Longer values interfere less while typing.",
+        control: {
+          type: "text",
+          key: "modifyFormatDelaySeconds",
+          placeholder: String(DEFAULT_SETTINGS.modifyFormatDelaySeconds),
+          defaultValue: String(DEFAULT_SETTINGS.modifyFormatDelaySeconds),
+          validate: (value) => {
+            const trimmed = value.trim();
+            if (trimmed === "") {
+              return;
+            }
+
+            const parsed = Number(trimmed);
+            if (!Number.isInteger(parsed) || parsed < 1) {
+              return "Auto-format delay must be an integer >= 1 or blank.";
+            }
+          }
+        }
+      },
+      {
+        name: "Enable auto-format and focus control while editing",
+        desc: "Controls modify-triggered table formatting while editing in Live Preview or Source mode.",
+        control: {
+          type: "toggle",
+          key: "editingAssistEnabled",
+          defaultValue: DEFAULT_SETTINGS.editingAssistEnabled
+        }
+      }
+    ];
+  }
+
+  getControlValue(key: string): unknown {
+    switch (key) {
+      case "paddingSpaces":
+        return this.plugin.settings.paddingSpaces === null
+          ? ""
+          : String(this.plugin.settings.paddingSpaces);
+      case "dashCount":
+        return this.plugin.settings.dashCount === null
+          ? ""
+          : String(this.plugin.settings.dashCount);
+      case "modifyFormatDelaySeconds":
+        return String(this.plugin.settings.modifyFormatDelaySeconds);
+      default:
+        return undefined;
+    }
+  }
+
+  async setControlValue(key: string, value: unknown): Promise<void> {
+    switch (key) {
+      case "paddingSpaces": {
+        const trimmed = String(value).trim();
+        if (trimmed === "") {
+          this.plugin.settings.paddingSpaces = null;
+        } else {
+          const parsed = Number(trimmed);
+          if (!Number.isInteger(parsed) || parsed < 0) {
+            return;
+          }
+          this.plugin.settings.paddingSpaces = parsed;
+        }
+        await this.plugin.saveSettings();
+        return;
+      }
+      case "dashCount": {
+        const trimmed = String(value).trim();
+        if (trimmed === "") {
+          this.plugin.settings.dashCount = null;
+        } else {
+          const parsed = Number(trimmed);
+          if (!Number.isInteger(parsed) || parsed < 1) {
+            return;
+          }
+          this.plugin.settings.dashCount = parsed;
+        }
+        await this.plugin.saveSettings();
+        return;
+      }
+      case "modifyFormatDelaySeconds": {
+        const trimmed = String(value).trim();
+        if (trimmed === "") {
+          this.plugin.settings.modifyFormatDelaySeconds = DEFAULT_SETTINGS.modifyFormatDelaySeconds;
+        } else {
+          const parsed = Number(trimmed);
+          if (!Number.isInteger(parsed) || parsed < 1) {
+            return;
+          }
+          this.plugin.settings.modifyFormatDelaySeconds = parsed;
+        }
+        await this.plugin.saveSettings();
+        return;
+      }
+      case "editingAssistEnabled":
+        this.plugin.settings.editingAssistEnabled = Boolean(value);
+        await this.plugin.saveSettings();
+        this.plugin.refreshToggleRibbonButton();
+        return;
+      default:
+        return;
+    }
   }
 
   display(): void {
